@@ -1,0 +1,33 @@
+# Secrets — NEVER commit
+.env
+.env.*
+!.env.example
+
+# Python venv / build artefacts
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Dataset assets (large; provided out-of-band — see README "Prerequisites")
+# Image folders are NOT committed. Top-level CSVs in data/ ARE committed so
+# that split / classifier scripts can be re-run without API keys.
+data/*/
+data/embeddings.sqlite
+
+# Crawler is a single-use tool, kept out of the repo
+download_photos.py
+
+# Scratch
+/tmp/
+*.log
