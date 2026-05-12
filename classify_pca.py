@@ -1,11 +1,12 @@
 """PCA + 1-NN sweep on top of the frozen Gemini embeddings.
 
-For each target dim d in {32, 64, 128, 256, 512, 1024, 3072}:
-  - Fit PCA on train (no whitening)
+For each target dim d in {32, 64, 128, 256, 512, 1024, 3072} and each
+whitening setting w in {False, True}:
+  - Fit PCA on train (whitening rescales each component to unit variance)
   - L2-normalize projected train/valid/test
   - 1-NN cosine + 3-NN, 5-NN
-Pick the (model, k) with the best valid top-1; report TEST top-1/3/5 and per-class
-accuracy. 'Unidentified' / 'Juvenile' dropped (aggregate labels).
+Pick the (dim, whiten, k) with the best valid top-1; report TEST top-1/3/5 and
+per-class accuracy. 'Unidentified' / 'Juvenile' dropped (aggregate labels).
 """
 import csv, sqlite3, struct
 from collections import defaultdict
@@ -22,6 +23,7 @@ PRED_OUT = DATA / "predictions_pca.csv"
 DROP = ("Unidentified", "Juvenile")
 DIM = 3072
 PCA_DIMS = [32, 64, 128, 256, 512, 1024, 3072]
+WHITEN = [False, True]
 KS = [1, 3, 5]
 
 def load():
@@ -81,58 +83,63 @@ def main():
     n_classes = len(classes)
     print(f"classes={n_classes} train={len(ytr)} valid={len(yva)} test={len(yte)}\n")
 
-    rows_v, rows_t = [], []
-    cache = {}  # (dim) -> (Xtr_p, Xva_p, Xte_p)
+    rows_v = []
+    cache = {}  # (dim, whiten) -> (Xtr_p, Xva_p, Xte_p)
 
     max_pca = min(Xtr.shape[0], Xtr.shape[1])  # PCA can't exceed n_samples
     dims = sorted({d if d <= max_pca else max_pca for d in PCA_DIMS})
 
     print(f"=== VALID top-1 sweep (max PCA dim = {max_pca}) ===")
-    print(f"  {'dim':>4} | {'k=1':>5} {'k=3':>5} {'k=5':>5}")
-    for d in dims:
-        if d >= Xtr.shape[1]:
-            Xtr_p, Xva_p, Xte_p = Xtr, Xva, Xte
-        else:
-            pca = PCA(n_components=d, whiten=False, svd_solver="full", random_state=0)
-            Xtr_p = pca.fit_transform(Xtr)
-            Xva_p = pca.transform(Xva)
-            Xte_p = pca.transform(Xte)
-        Xtr_p = l2norm(Xtr_p); Xva_p = l2norm(Xva_p); Xte_p = l2norm(Xte_p)
-        cache[d] = (Xtr_p, Xva_p, Xte_p)
-        line_v = [f"{d:>4} |"]
-        for k in KS:
-            s = knn_scores(Xtr_p, ytr, Xva_p, k, n_classes)
-            a = topk_acc(s, yva, 1)
-            line_v.append(f"{a:>5.3f}")
-            rows_v.append((d, k, "valid", a, topk_acc(s, yva, 3), topk_acc(s, yva, 5)))
-        print("  " + " ".join(line_v))
+    print(f"  {'dim':>4} {'whiten':>6} | {'k=1':>5} {'k=3':>5} {'k=5':>5}")
+    for w in WHITEN:
+        for d in dims:
+            if d >= Xtr.shape[1] and not w:
+                # Identity projection — whiten=True still rescales, so we
+                # only short-circuit when no transform is needed.
+                Xtr_p, Xva_p, Xte_p = Xtr, Xva, Xte
+            else:
+                pca = PCA(n_components=d, whiten=w, svd_solver="full", random_state=0)
+                Xtr_p = pca.fit_transform(Xtr)
+                Xva_p = pca.transform(Xva)
+                Xte_p = pca.transform(Xte)
+            Xtr_p = l2norm(Xtr_p); Xva_p = l2norm(Xva_p); Xte_p = l2norm(Xte_p)
+            cache[(d, w)] = (Xtr_p, Xva_p, Xte_p)
+            line_v = [f"{d:>4} {str(w):>6} |"]
+            for k in KS:
+                s = knn_scores(Xtr_p, ytr, Xva_p, k, n_classes)
+                a = topk_acc(s, yva, 1)
+                line_v.append(f"{a:>5.3f}")
+                rows_v.append((d, w, k, a, topk_acc(s, yva, 3), topk_acc(s, yva, 5)))
+            print("  " + " ".join(line_v))
 
-    # Pick best by valid top-1 (tiebreak: lower dim, then lower k)
-    best = max(rows_v, key=lambda r: (r[3], -r[0], -r[1]))
-    best_d, best_k = best[0], best[1]
-    print(f"\nBest on valid: dim={best_d}, k={best_k}  (valid top-1={best[3]:.3f}, top-3={best[4]:.3f}, top-5={best[5]:.3f})\n")
+    # Pick best by valid top-1 (tiebreak: no-whiten preferred, lower dim, lower k)
+    best = max(rows_v, key=lambda r: (r[3], not r[1], -r[0], -r[2]))
+    best_d, best_w, best_k = best[0], best[1], best[2]
+    print(f"\nBest on valid: dim={best_d}, whiten={best_w}, k={best_k}  "
+          f"(valid top-1={best[3]:.3f}, top-3={best[4]:.3f}, top-5={best[5]:.3f})\n")
 
     # Full TEST table
     print(f"=== TEST ===")
-    print(f"  {'dim':>4} {'k':>3} | {'top1':>5} {'top3':>5} {'top5':>5}")
+    print(f"  {'dim':>4} {'whiten':>6} {'k':>3} | {'top1':>5} {'top3':>5} {'top5':>5}")
     test_table = []
-    for d in dims:
-        Xtr_p, _, Xte_p = cache[d]
-        for k in KS:
-            s = knn_scores(Xtr_p, ytr, Xte_p, k, n_classes)
-            t1, t3, t5 = topk_acc(s, yte, 1), topk_acc(s, yte, 3), topk_acc(s, yte, 5)
-            mark = "  <-- best on valid" if (d == best_d and k == best_k) else ""
-            print(f"  {d:>4} {k:>3} | {t1:>5.3f} {t3:>5.3f} {t5:>5.3f}{mark}")
-            test_table.append((d, k, t1, t3, t5, s))
+    for w in WHITEN:
+        for d in dims:
+            Xtr_p, _, Xte_p = cache[(d, w)]
+            for k in KS:
+                s = knn_scores(Xtr_p, ytr, Xte_p, k, n_classes)
+                t1, t3, t5 = topk_acc(s, yte, 1), topk_acc(s, yte, 3), topk_acc(s, yte, 5)
+                mark = "  <-- best on valid" if (d == best_d and w == best_w and k == best_k) else ""
+                print(f"  {d:>4} {str(w):>6} {k:>3} | {t1:>5.3f} {t3:>5.3f} {t5:>5.3f}{mark}")
+                test_table.append((d, w, k, t1, t3, t5, s))
 
     # Per-class for the winner on test
-    s_win = next(r[5] for r in test_table if r[0] == best_d and r[1] == best_k)
+    s_win = next(r[6] for r in test_table if r[0] == best_d and r[1] == best_w and r[2] == best_k)
     pred = s_win.argmax(axis=1)
     per_class = defaultdict(lambda: [0, 0])
     for i, t in enumerate(yte):
         per_class[classes[t]][1] += 1
         if pred[i] == t: per_class[classes[t]][0] += 1
-    print(f"\n=== Per-class TEST top-1 (dim={best_d}, k={best_k}) ===")
+    print(f"\n=== Per-class TEST top-1 (dim={best_d}, whiten={best_w}, k={best_k}) ===")
     print(f"  {'name':<22} {'correct':>7} {'total':>5} {'acc':>5}")
     for cname in sorted(per_class, key=lambda c: (-per_class[c][0]/max(1, per_class[c][1]), c)):
         c, n = per_class[cname]
@@ -152,7 +159,7 @@ def main():
             "correct_top1": int(preds[0] == true),
             "correct_top5": int(true in preds),
             "top5": ";".join(preds),
-            "config": f"pca{best_d}_k{best_k}",
+            "config": f"pca{best_d}_w{int(best_w)}_k{best_k}",
         })
     with PRED_OUT.open("w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(out_rows[0].keys()))

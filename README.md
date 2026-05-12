@@ -13,8 +13,8 @@ for the expected layout.
 
 | metric | value |
 |---|---:|
-| individuals (classes) | 37 (after dropping aggregate `Unidentified` / `Juvenile`) |
-| carapace photos used | 682 |
+| individuals (classes) | 37 (excludes `Unidentified` upstream; `Juvenile` dropped by classifier) |
+| carapace photos used | 633 |
 | split | 432 train / 98 valid / 98 test |
 | **best test top-1** | **0.857** (PCA → 128, 1-NN cosine) |
 | best test top-5 | 0.939 (PCA → 256, 5-NN cosine) |
@@ -94,7 +94,8 @@ the classifier.
                         │
                         ▼
    make_splits.py      ──►  data/splits.csv                       [committed]
-       (filter to carapace photos; ~70/15/15; min ≥2 train + 1 valid + 1 test)
+       (exclude 'Unidentified' folder; filter to carapace photos;
+        ~70/15/15; min ≥2 train + 1 valid + 1 test)
                         │
                         ▼
    classify.py / classify_pca.py
@@ -147,8 +148,9 @@ v = struct.unpack("<3072f", blob)   # tuple of 3072 floats, L2-normalized
 ```
 
 ### `make_splits.py`
-Filters `classifications.csv` to **carapace photos only** (drops illustrations
-and non-carapace categories), keeps individuals with ≥4 carapace photos, then
+Excludes the `Unidentified` folder (it aggregates many individuals), filters
+`classifications.csv` to **carapace photos only** (drops illustrations and
+non-carapace categories), keeps individuals with ≥4 carapace photos, then
 splits ~70/15/15 with hard minimums (≥2 train, ≥1 valid, ≥1 test). Seeded
 (`SEED=42`) for reproducibility. Writes `data/splits.csv`.
 
@@ -160,16 +162,52 @@ top-1/3/5 accuracy plus per-class breakdown:
 2. **k-NN cosine** (k=1, 3, 5) over all train embeddings.
 3. **Logistic regression** linear probe.
 
-By default it drops the aggregate labels `Unidentified` and `Juvenile` (these
-bins lump multiple individuals — keeping them as classes hurts accuracy).
-Pass `--keep-aggregates` to include them.
+By default it also drops `Juvenile` (5 photos, multi-individual bin); pass
+`--keep-aggregates` to include it. (`Unidentified` is already excluded
+upstream by `make_splits.py`, so it never reaches the classifier.)
 
 Writes `data/predictions.csv` for the model that won on `valid`.
 
 ### `classify_pca.py`
-Sweeps PCA dims `{32, 64, 128, 256, 512, 1024, 3072}` × k `{1, 3, 5}` for
-1-NN-style cosine ranking, picks the best on `valid`, reports test
-top-1/3/5 + per-class. Writes `data/predictions_pca.csv`.
+Sweeps PCA dims `{32, 64, 128, 256, 512, 1024, 3072}` × whiten `{False, True}`
+× k `{1, 3, 5}` for 1-NN-style cosine ranking, picks the best on `valid`,
+reports test top-1/3/5 + per-class. Writes `data/predictions_pca.csv`. Also
+drops `Juvenile` (and inherits the upstream `Unidentified` exclusion).
+Whitening currently never wins — it loses 5–10pp at medium dims and
+collapses to ~0.2 top-1 near full rank, where it amplifies noise from
+small-eigenvalue components.
+
+### `visualize.py`
+Computes 2-D **t-SNE** and **UMAP** projections (cosine metric) of every
+carapace photo embedding (633 photos, 38 individuals; `Unidentified`
+excluded). Writes a single self-contained HTML — `embedding_viz.html` at
+the repo root — with a full-screen scatter plot, t-SNE / UMAP toggle
+(default t-SNE), color-coded by individual, image preview on hover, and a
+click-to-isolate legend.
+
+```bash
+python visualize.py
+open embedding_viz.html
+```
+
+Requires `umap-learn`. No API calls — operates on the cached embeddings in
+`data/embeddings.sqlite`. The HTML is gitignored: it references the
+gitignored image folders by relative path (`data/<turtle>/<id>.jpg`).
+
+### `identify.py`
+One-shot single-image classifier. Embeds a new photo with
+`gemini-embedding-2-preview`, then runs the headline classifier
+(PCA→128, no-whiten, 1-NN cosine) using **all 628 labeled images
+(train + valid + test, minus `Juvenile`)** as the reference pool.
+
+```bash
+python identify.py path/to/photo.jpg              # default: PCA=128, k=1
+python identify.py path/to/photo.jpg --top 5 --k 5
+```
+
+Prints the top-N candidate individuals and the nearest reference images
+(with cosine similarity). Needs `GEMINI_API_KEY` and an existing
+`data/embeddings.sqlite`.
 
 ---
 
@@ -193,9 +231,10 @@ Keys live in `.env` (gitignored — see `.env.example`).
 ## Notes / caveats
 
 - **`Unidentified` (49 carapace photos)** and **`Juvenile` (5)** are bin labels
-  in the source data, not single individuals. They're dropped by default in
-  `classify*.py` because they pollute prototypes and inflate confusion. Keep
-  them if you have a use case (e.g. open-set / unknown detection).
+  in the source data, not single individuals. `Unidentified` is excluded by
+  `make_splits.py` so it never appears in train/valid/test. `Juvenile` is also
+  dropped by default in `classify*.py` — pass `--keep-aggregates` to include
+  it (e.g. for open-set / unknown-detection experiments).
 - Classes are heavily imbalanced (Cruella has 52 train images, Emoji has 2).
   k-NN handles this well; logistic regression overfits.
 - Embeddings are computed on the **whole frame**, not on a cropped carapace.

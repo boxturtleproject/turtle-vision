@@ -1,6 +1,7 @@
 """Build train/valid/test split of carapace photos for individual-turtle ID.
 
 Filters:
+  - turtle_name not in EXCLUDED (aggregate folders that aren't single individuals)
   - category == 'carapace'
   - media_type == 'photo'   (illustrations excluded)
   - per turtle: keep only individuals with >= 4 qualifying images
@@ -20,6 +21,8 @@ OUT = DATA / "splits.csv"
 SEED = 42
 MIN_TOTAL = 4
 MIN_TRAIN = 2
+# Folders that aggregate multiple individuals — excluded from train/valid/test entirely.
+EXCLUDED = {"Unidentified"}
 
 def split_counts(n):
     n_valid = max(1, round(n * 0.15))
@@ -29,8 +32,11 @@ def split_counts(n):
     return n_train, n_valid, n_test
 
 def main():
-    rows = list(csv.DictReader(SRC.open()))
-    total = len(rows)
+    raw_rows = list(csv.DictReader(SRC.open()))
+    total = len(raw_rows)
+
+    excluded_rows = [r for r in raw_rows if r["turtle_name"] in EXCLUDED]
+    rows = [r for r in raw_rows if r["turtle_name"] not in EXCLUDED]
 
     # Apply filters
     cara = [r for r in rows if r["category"] == "carapace" and r["media_type"] == "photo"]
@@ -79,6 +85,7 @@ def main():
     def n_unique(rows): return len({r["turtle_name"] for r in rows})
 
     print(f"Source rows: {total}")
+    print(f"  excluded folders {sorted(EXCLUDED)}: {len(excluded_rows)} rows dropped")
     print(f"  carapace photos:           {len(cara):>4}  ({n_unique(cara)} individuals)")
     print(f"  illustrations (excluded):  {len(illustrations):>4}  ({n_unique(illustrations)} individuals)")
     print(f"  other photo categories:    {len(other_cats):>4}  "
