@@ -24,6 +24,8 @@ Thumbs.db
 # that split / classifier scripts can be re-run without API keys.
 data/*/
 data/embeddings.sqlite
+data/embeddings_crop.sqlite
+data/embeddings_tight.sqlite
 /embedding_viz.html
 
 # Crawler is a single-use tool, kept out of the repo
@@ -32,3 +34,7 @@ download_photos.py
 # Scratch
 /tmp/
 *.log
+
+# Field-test app: uploaded photos + session log (contain new, unpublished photos)
+uploads/
+results/
