@@ -50,6 +50,10 @@ python make_splits.py
 # 6. train + evaluate the classifier (no API calls; ~10 sec)
 python classify.py        # baseline: prototype, k-NN, logistic regression
 python classify_pca.py    # PCA + 1-NN sweep (recommended)
+
+# 7. (optional) crop references to the shell, then run the field-test app
+python crop_photos.py     # ~628 Gemini box calls + embeddings
+python app.py
 ```
 
 `data/classifications.csv` and `data/splits.csv` are committed, so you can skip
@@ -213,18 +217,29 @@ Prints the top-N candidate individuals and the nearest reference images
 (with cosine similarity). Needs `GEMINI_API_KEY` and an existing
 `data/embeddings.sqlite`.
 
+### `crop_photos.py` — shell crops for the reference set
+For every photo in `splits.csv`: asks Gemini (`gemini-2.5-flash`, override with
+`CROP_MODEL`) for the carapace bounding box, crops with a 5% margin (full frame
+if no shell is found), and embeds the crop. Boxes → `data/crops.csv`
+(committed), crops → `data/crops/<turtle>/<id>.jpg`, vectors →
+`data/embeddings_crop.sqlite`. Resume-safe. The crop logic lives in
+`shellcrop.py` and is shared with `app.py`.
+
 ### `app.py` — field-test web app
-Upload a photo (laptop, or a phone on the same Wi-Fi), see the top-5 matching
-individuals with their nearest reference photos, and record a verdict
-(correct / in top 5 / wrong + true name / new turtle / bad photo). Uses the
-same classifier as `identify.py`; uploads are EXIF-rotated, downscaled to
-1280px and re-encoded as JPEG (HEIC supported) before embedding. A "possibly
-a new turtle" cut-off is calibrated at startup by leave-one-out over the
-reference set (override with `--threshold`). Uploads go to `uploads/`, every
-upload and verdict to `results/session_log.csv` (both gitignored).
+Upload a photo (laptop, or a phone on the same Wi-Fi) and compare two matchers
+side by side: **whole photo** vs. **cropped to shell** (the upload is cropped
+on the fly with the same Gemini box prompt). Each column shows the top-5
+individuals with their nearest reference photos and a "possibly new turtle"
+flag (cut-off calibrated per matcher at startup by leave-one-out). Record the
+true answer once — which turtle / new turtle / bad photo — and the app scores
+both matchers (top-1, top-5, new turtles flagged, known turtles wrongly
+flagged). Uploads are EXIF-rotated, downscaled to 1280px and re-encoded as JPEG
+(HEIC supported). `/crops` shows every reference crop for review. Uploads go
+to `uploads/`, every upload and verdict to `results/session_log.csv` (both
+gitignored).
 
 ```bash
-python app.py            # prints localhost + LAN URL
+python app.py            # prints localhost + LAN URL; --no-crop for full-frame only
 ```
 
 ### Gemini via Vertex AI
