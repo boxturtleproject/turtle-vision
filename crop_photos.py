@@ -72,8 +72,9 @@ def box_of(rec):
 def process(client, row, box_rec, done):
     cid = int(row["capture_id"])
     src = ROOT / row["file_path"]
+    img = Image.open(src)
     if box_rec is None:
-        box = retry(shellcrop.detect_box, client, src.read_bytes())
+        box = retry(shellcrop.detect_box, client, img)
         with lock:
             save_box(row, box)
     else:
@@ -81,7 +82,6 @@ def process(client, row, box_rec, done):
 
     out = crop_path(row)
     if not out.exists():
-        img = Image.open(src)
         out.parent.mkdir(parents=True, exist_ok=True)
         (shellcrop.crop_to_box(img, box) if box else img).convert("RGB").save(out, "JPEG", quality=90)
 
@@ -93,7 +93,7 @@ def process(client, row, box_rec, done):
 
 def main():
     identify.load_env()
-    client = identify.make_client()
+    client = shellcrop.make_client()
     rows = list(csv.DictReader(identify.SPLITS.open()))
     missing = [r["file_path"] for r in rows if not (ROOT / r["file_path"]).exists()]
     if missing:

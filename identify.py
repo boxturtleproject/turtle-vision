@@ -8,7 +8,7 @@ reference pool. 'Unidentified' is already excluded upstream by make_splits.py;
 Usage:
     python identify.py path/to/photo.jpg [--top 5] [--pca 128] [--k 1] [--whiten]
 """
-import argparse, csv, mimetypes, os, sqlite3, struct, sys
+import argparse, csv, functools, mimetypes, os, sqlite3, struct, sys
 from pathlib import Path
 
 import numpy as np
@@ -63,6 +63,7 @@ def load_reference(drop, db=DB):
     return names, paths, X
 
 
+@functools.cache
 def make_client():
     """Vertex AI (ADC auth) if GOOGLE_GENAI_USE_VERTEXAI is set, else Gemini API key."""
     from google import genai

@@ -142,7 +142,7 @@ def build_app(indexes: dict[str, Index]) -> FastAPI:
     UPLOADS.mkdir(exist_ok=True)
     app.mount("/data", StaticFiles(directory=identify.DATA), name="data")
     app.mount("/uploads", StaticFiles(directory=UPLOADS), name="uploads")
-    client = identify.make_client()
+    crop_client = shellcrop.make_client()
     pool = ThreadPoolExecutor(4)
     classes = sorted(set().union(*(ix.classes for ix in indexes.values())))
 
@@ -165,7 +165,7 @@ def build_app(indexes: dict[str, Index]) -> FastAPI:
                 "matches": indexes["full"].query(identify.embed_image(path))}
 
     def run_crop(path: Path, img: Image.Image):
-        box = shellcrop.detect_box(client, path.read_bytes())
+        box = shellcrop.detect_box(crop_client, img)
         cpath = path.with_name(path.stem + "_crop.jpg")
         (shellcrop.crop_to_box(img, box) if box else img).save(cpath, "JPEG", quality=90)
         return {"image": f"/uploads/{cpath.name}", "box": box,

@@ -218,7 +218,7 @@ Prints the top-N candidate individuals and the nearest reference images
 `data/embeddings.sqlite`.
 
 ### `crop_photos.py` — shell crops for the reference set
-For every photo in `splits.csv`: asks Gemini (`gemini-2.5-flash`, override with
+For every photo in `splits.csv`: asks Gemini (`gemini-3.6-flash`, override with
 `CROP_MODEL`) for the carapace bounding box, crops with a 5% margin (full frame
 if no shell is found), and embeds the crop. Boxes → `data/crops.csv`
 (committed), crops → `data/crops/<turtle>/<id>.jpg`, vectors →
