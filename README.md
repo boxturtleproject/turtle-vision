@@ -219,20 +219,24 @@ Prints the top-N candidate individuals and the nearest reference images
 
 ### `crop_photos.py` — shell crops for the reference set
 For every photo in `splits.csv`: asks Gemini (`gemini-3.6-flash`, override with
-`CROP_MODEL`) for the carapace bounding box, crops with a 5% margin (full frame
-if no shell is found), and embeds the crop. Boxes → `data/crops.csv`
-(committed), crops → `data/crops/<turtle>/<id>.jpg`, vectors →
-`data/embeddings_crop.sqlite`. Resume-safe. The crop logic lives in
-`shellcrop.py` and is shared with `app.py`.
+`CROP_MODEL`) for the carapace bounding box (`data/crops.csv`, committed), then
+crops it two ways and embeds each (full frame if no shell is found):
+
+| variant | crop | images | vectors |
+|---|---|---|---|
+| `crop` | box + 5% margin | `data/crops/<turtle>/<id>.jpg` | `data/embeddings_crop.sqlite` |
+| `tight` | central 71% of the box (largest rectangle inside an ellipse) — all shell, loses marginal scutes | `data/crops_tight/<turtle>/<id>.jpg` | `data/embeddings_tight.sqlite` |
+
+Resume-safe. The crop logic lives in `shellcrop.py` and is shared with `app.py`.
 
 ### `app.py` — field-test web app
 Upload a photo (laptop, or a phone on the same Wi-Fi) and compare two matchers
-side by side: **whole photo** vs. **cropped to shell** (the upload is cropped
-on the fly with the same Gemini box prompt). Each column shows the top-5
+side by side: **whole photo**, **cropped to shell** and **tight (inside
+shell)** — the upload is cropped on the fly with the same Gemini box prompt. Each column shows the top-5
 individuals with their nearest reference photos and a "possibly new turtle"
 flag (cut-off calibrated per matcher at startup by leave-one-out). Record the
 true answer once — which turtle / new turtle / bad photo — and the app scores
-both matchers (top-1, top-5, new turtles flagged, known turtles wrongly
+every matcher (top-1, top-5, new turtles flagged, known turtles wrongly
 flagged). Uploads are EXIF-rotated, downscaled to 1280px and re-encoded as JPEG
 (HEIC supported). `/crops` shows every reference crop for review. Uploads go
 to `uploads/`, every upload and verdict to `results/session_log.csv` (both

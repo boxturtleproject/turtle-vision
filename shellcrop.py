@@ -22,6 +22,14 @@ CROP_LOCATION = os.environ.get("CROP_LOCATION", "global")
 DETECT_SIDE = 640  # downscale before asking for the box
 MARGIN = 0.05  # fraction of box size added on each side
 
+# Crop variants built from the same box. "tight" keeps the central 1/sqrt(2)
+# of the box — the largest rectangle inscribed in an ellipse — so it is
+# almost all shell, at the cost of the marginal scutes.
+VARIANTS = {
+    "crop":  {"margin": MARGIN, "dir": "crops", "db": "embeddings_crop.sqlite"},
+    "tight": {"margin": -(1 - 2 ** -0.5) / 2, "dir": "crops_tight", "db": "embeddings_tight.sqlite"},
+}
+
 PROMPT = (
     "Find the box turtle's carapace (the top shell) in this photo. Return a "
     "tight bounding box around the shell only — exclude the head, legs, hands, "

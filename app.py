@@ -4,8 +4,9 @@ Upload a carapace photo (from a laptop or a phone on the same Wi-Fi) and see
 the closest known individuals from two matchers side by side:
 
   full  — embed the whole photo (the headline classifier from identify.py)
-  crop  — crop to the shell with a Gemini bounding box first, then embed;
-          compared against crop_photos.py's cropped reference set
+  crop  — crop to the shell with a Gemini bounding box (+5% margin), then embed
+  tight — same box, keep only its central 71% so the image is all shell
+          (crop/tight compare against crop_photos.py's reference crops)
 
 Both use PCA -> 128 + 1-NN cosine. You record the true answer once (which
 turtle / new turtle / bad photo) and the app scores both matchers against it.
@@ -17,6 +18,7 @@ is its nearest same-turtle photo vs. its nearest other-turtle photo.
 
     python app.py                 # http://localhost:8000 (+ LAN URL printed)
     python app.py --no-crop       # full-frame matcher only
+    python app.py --crop-db X --tight-db Y   # alternate crop embedding DBs
 """
 import argparse, csv, html, io, socket, uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -40,7 +42,6 @@ register_heif_opener()  # iPhone HEIC uploads
 ROOT = Path(__file__).resolve().parent
 UPLOADS = ROOT / "uploads"
 LOG = ROOT / "results" / "session_log.csv"
-CROP_DB = identify.DATA / "embeddings_crop.sqlite"
 LOG_FIELDS = ["time", "upload_id", "event", "method", "filename", "box", "top1",
               "top1_sim", "top5", "likely_new", "verdict", "true_name", "notes"]
 VERDICTS = ("known", "new_turtle", "bad_photo")
@@ -68,10 +69,10 @@ def calibrate(X, y):
 
 
 class Index:
-    def __init__(self, db: Path, pca_dim: int, crops: bool = False):
+    def __init__(self, db: Path, pca_dim: int, ref_dir: str = ""):
         self.names, self.paths, X = identify.load_reference(identify.DROP, db)
-        if crops:  # show the cropped reference photos in the crop column
-            self.paths = [p.replace("data/", "data/crops/", 1) for p in self.paths]
+        if ref_dir:  # show the matching reference crops, e.g. data/crops/<turtle>/<id>.jpg
+            self.paths = [p.replace("data/", f"data/{ref_dir}/", 1) for p in self.paths]
         self.classes = sorted(set(self.names))
         self.pca = PCA(n_components=min(pca_dim, *X.shape), svd_solver="full",
                        random_state=0).fit(X)
@@ -144,6 +145,8 @@ def build_app(indexes: dict[str, Index]) -> FastAPI:
     app.mount("/uploads", StaticFiles(directory=UPLOADS), name="uploads")
     crop_client = shellcrop.make_client()
     pool = ThreadPoolExecutor(4)
+    embed_pool = ThreadPoolExecutor(4)  # crop variants embed in parallel once the box is known
+    crop_variants = [v for v in shellcrop.VARIANTS if v in indexes]
     classes = sorted(set().union(*(ix.classes for ix in indexes.values())))
 
     @app.get("/", response_class=HTMLResponse)
@@ -164,12 +167,17 @@ def build_app(indexes: dict[str, Index]) -> FastAPI:
         return {"image": f"/uploads/{path.name}", "box": None,
                 "matches": indexes["full"].query(identify.embed_image(path))}
 
-    def run_crop(path: Path, img: Image.Image):
-        box = shellcrop.detect_box(crop_client, img)
-        cpath = path.with_name(path.stem + "_crop.jpg")
-        (shellcrop.crop_to_box(img, box) if box else img).save(cpath, "JPEG", quality=90)
+    def run_variant(variant: str, path: Path, img: Image.Image, box):
+        cpath = path.with_name(f"{path.stem}_{variant}.jpg")
+        crop = shellcrop.crop_to_box(img, box, shellcrop.VARIANTS[variant]["margin"]) if box else img
+        crop.save(cpath, "JPEG", quality=90)
         return {"image": f"/uploads/{cpath.name}", "box": box,
-                "matches": indexes["crop"].query(identify.embed_image(cpath))}
+                "matches": indexes[variant].query(identify.embed_image(cpath))}
+
+    def run_crops(path: Path, img: Image.Image):
+        """One box call, then embed every crop variant in parallel."""
+        box = shellcrop.detect_box(crop_client, img)
+        return {v: embed_pool.submit(run_variant, v, path, img, box) for v in crop_variants}
 
     @app.post("/api/identify")
     def identify_upload(image: UploadFile = File(...)):
@@ -184,8 +192,12 @@ def build_app(indexes: dict[str, Index]) -> FastAPI:
         img.save(path, "JPEG", quality=85)
 
         jobs = {"full": pool.submit(run_full, path)}
-        if "crop" in indexes:
-            jobs["crop"] = pool.submit(run_crop, path, img)
+        if crop_variants:
+            crops_job = pool.submit(run_crops, path, img)
+            try:
+                jobs.update(crops_job.result())
+            except Exception as e:  # box call failed: report it on every crop column
+                jobs.update({v: crops_job for v in crop_variants})
         results, log_rows = {}, []
         for method, job in jobs.items():
             try:
@@ -233,10 +245,11 @@ def crops_review_html():
         if group != current:
             tiles.append(f"<h2>{esc(group)}</h2>")
             current = group
-        crop = f"/data/crops/{esc(r['turtle_name'])}/{esc(r['capture_id'])}.jpg"
-        orig = f"/data/{esc(r['turtle_name'])}/{esc(r['capture_id'])}.jpg"
-        tiles.append(f'<figure><a href="{orig}" target="_blank" title="open original">'
-                     f'<img loading="lazy" src="{crop}"></a><figcaption>{esc(r["capture_id"])}'
+        rel = f"{esc(r['turtle_name'])}/{esc(r['capture_id'])}.jpg"
+        imgs = "".join(f'<img loading="lazy" src="/data/{cfg["dir"]}/{rel}" title="{v}">'
+                       for v, cfg in shellcrop.VARIANTS.items())
+        tiles.append(f'<figure><a href="/data/{rel}" target="_blank" title="open original">'
+                     f'{imgs}</a><figcaption>{esc(r["capture_id"])}'
                      f'{"" if r["found"] == "1" else " · " + esc(r["turtle_name"])}</figcaption></figure>')
     n_miss = sum(r["found"] != "1" for r in rows)
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -244,9 +257,9 @@ def crops_review_html():
 <style>body{{margin:0;padding:16px;font:14px/1.4 system-ui,sans-serif;background:#f6f4ee;color:#1d2a22}}
 h1{{font-size:20px;margin:0 0 4px}}h2{{width:100%;font-size:15px;margin:18px 0 6px}}
 .grid{{display:flex;flex-wrap:wrap;gap:8px}}figure{{margin:0}}
-img{{height:120px;border-radius:6px;display:block}}figcaption{{color:#6b756e;font-size:12px}}</style></head>
+figure a{{display:flex;gap:3px}}img{{height:110px;border-radius:6px;display:block}}figcaption{{color:#6b756e;font-size:12px}}</style></head>
 <body><h1>Reference crops</h1><div>{len(rows)} photos · {n_miss} with no shell found ·
-click a crop to open the original</div><div class="grid">{"".join(tiles)}</div></body></html>"""
+each pair is crop | tight · click to open the original</div><div class="grid">{"".join(tiles)}</div></body></html>"""
 
 
 PAGE = """<!doctype html>
@@ -284,7 +297,7 @@ table{border-collapse:collapse;font-size:14px;width:100%}th,td{text-align:left;p
 <div class="card" id="stats"></div>
 </main><script>
 let INFO, CUR, TRUTH;
-const LABEL = {full: 'Whole photo', crop: 'Cropped to shell'};
+const LABEL = {full: 'Whole photo', crop: 'Cropped to shell', tight: 'Tight (inside shell)'};
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pct = (a, b) => b ? `${a}/${b} (${Math.round(100*a/b)}%)` : '–';
@@ -317,13 +330,13 @@ function column(method, r){
   const banner = r.likely_new
     ? `<div class="banner new">Possibly new: best ${m[0].sim} &lt; ${r.threshold}</div>`
     : `<div class="banner known">Best: ${esc(m[0].name)} (${m[0].sim})</div>`;
-  const thumb = method === 'crop' ? `<a class="cropimg" href="${r.image}" target="_blank"><img src="${r.image}" title="${r.box ? 'box ' + r.box : 'no shell found — full frame'}"></a>` : '';
+  const thumb = method !== 'full' ? `<a class="cropimg" href="${r.image}" target="_blank"><img src="${r.image}" title="${r.box ? 'box ' + r.box : 'no shell found — full frame'}"></a>` : '';
   const rows = m.map((x, i) => `<div class="match ${TRUTH === x.name ? 'truth' : ''}">
       <div><span class="name">${i+1}. ${esc(x.name)}</span> <span class="sim">${x.sim}</span></div>
       <button data-name="${esc(x.name)}" onclick="send('known', this.dataset.name)">This is it</button>
       <div class="refs">${x.refs.map(rf => `<img loading="lazy" src="/${esc(rf.path)}" title="${rf.sim}">`).join('')}</div>
     </div>`).join('');
-  return `<div class="card col"><h2>${LABEL[method]}${method === 'crop' && !r.box ? ' <span class="muted">(no shell found)</span>' : ''}</h2>${thumb}${banner}${rows}</div>`;
+  return `<div class="card col"><h2>${LABEL[method]}${method !== 'full' && !r.box ? ' <span class="muted">(no shell found)</span>' : ''}</h2>${thumb}${banner}${rows}</div>`;
 }
 function render(){
   const opts = INFO.classes.map(c => `<option>${esc(c)}</option>`).join('');
@@ -368,7 +381,8 @@ def main():
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--pca", type=int, default=identify.DEFAULT_PCA)
     ap.add_argument("--db", type=Path, default=identify.DB)
-    ap.add_argument("--crop-db", type=Path, default=CROP_DB)
+    for v, cfg in shellcrop.VARIANTS.items():
+        ap.add_argument(f"--{v}-db", type=Path, default=identify.DATA / cfg["db"])
     ap.add_argument("--no-crop", action="store_true", help="full-frame matcher only")
     args = ap.parse_args()
 
@@ -378,10 +392,12 @@ def main():
 
     indexes = {"full": Index(args.db, args.pca)}
     if not args.no_crop:
-        if args.crop_db.exists():
-            indexes["crop"] = Index(args.crop_db, args.pca, crops=True)
-        else:
-            print(f"no {args.crop_db} — run crop_photos.py for the cropped matcher; full-frame only")
+        for v, cfg in shellcrop.VARIANTS.items():
+            db = getattr(args, f"{v}_db")
+            if db.exists():
+                indexes[v] = Index(db, args.pca, ref_dir=cfg["dir"])
+            else:
+                print(f"no {db} — run crop_photos.py for the {v!r} matcher")
     for m, ix in indexes.items():
         print(f"{m}: {len(ix.names)} reference photos, {len(ix.classes)} turtles; "
               f"new-turtle cut-off {ix.threshold:.3f} {ix.calib}")

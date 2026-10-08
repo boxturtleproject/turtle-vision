@@ -1,9 +1,11 @@
-"""Crop every reference carapace photo to the shell and embed the crop.
+"""Crop every reference carapace photo to the shell and embed the crops.
 
 For each row of data/splits.csv:
-  1. ask Gemini for the carapace bounding box   → data/crops.csv        [committed]
-  2. crop (5% margin; full frame if none found) → data/crops/<turtle>/<id>.jpg
-  3. embed the crop                              → data/embeddings_crop.sqlite
+  1. ask Gemini for the carapace bounding box → data/crops.csv  [committed]
+  2. crop it two ways (full frame if no shell found):
+       crop   box + 5% margin        → data/crops/<turtle>/<id>.jpg
+       tight  central 71% of the box → data/crops_tight/<turtle>/<id>.jpg
+  3. embed each crop → data/embeddings_crop.sqlite, data/embeddings_tight.sqlite
 
 Same embedding model/dims as embed_photos.py, so app.py can compare full-frame
 vs. cropped matching side by side. Resume-safe at every step.
@@ -23,8 +25,6 @@ import shellcrop
 ROOT = identify.ROOT
 DATA = identify.DATA
 BOXES = DATA / "crops.csv"
-CROPS = DATA / "crops"
-DB = DATA / "embeddings_crop.sqlite"
 BOX_FIELDS = ["capture_id", "turtle_name", "found", "ymin", "xmin", "ymax", "xmax", "crop_model"]
 WORKERS = 4
 RETRIES = 5
@@ -43,8 +43,8 @@ def retry(fn, *args):
             time.sleep(min(60, 2 * 2 ** attempt))
 
 
-def crop_path(row) -> Path:
-    return CROPS / row["turtle_name"] / f"{row['capture_id']}.jpg"
+def crop_path(variant, row) -> Path:
+    return DATA / shellcrop.VARIANTS[variant]["dir"] / row["turtle_name"] / f"{row['capture_id']}.jpg"
 
 
 def load_boxes():
@@ -80,15 +80,16 @@ def process(client, row, box_rec, done):
     else:
         box = box_of(box_rec)
 
-    out = crop_path(row)
-    if not out.exists():
-        out.parent.mkdir(parents=True, exist_ok=True)
-        (shellcrop.crop_to_box(img, box) if box else img).convert("RGB").save(out, "JPEG", quality=90)
-
-    if cid not in done:
-        v = retry(identify.embed_image, out)
-        return cid, row, v, box is not None
-    return cid, row, None, box is not None
+    vectors = {}
+    for variant, cfg in shellcrop.VARIANTS.items():
+        out = crop_path(variant, row)
+        if not out.exists():
+            out.parent.mkdir(parents=True, exist_ok=True)
+            crop = shellcrop.crop_to_box(img, box, cfg["margin"]) if box else img
+            crop.convert("RGB").save(out, "JPEG", quality=90)
+        if cid not in done[variant]:
+            vectors[variant] = retry(identify.embed_image, out)
+    return cid, row, vectors, box is not None
 
 
 def main():
@@ -99,29 +100,35 @@ def main():
     if missing:
         sys.exit(f"{len(missing)} images missing (e.g. {missing[0]}) — run fetch_data.py first")
 
-    con = sqlite3.connect(DB, check_same_thread=False)
-    con.execute("""CREATE TABLE IF NOT EXISTS images(
-        capture_id INTEGER PRIMARY KEY, turtle_name TEXT, file_path TEXT,
-        model TEXT, dim INTEGER, crop_model TEXT, embedded_at TEXT, embedding BLOB)""")
-    done = {r[0] for r in con.execute("SELECT capture_id FROM images WHERE embedding IS NOT NULL")}
+    cons, done = {}, {}
+    for variant, cfg in shellcrop.VARIANTS.items():
+        con = cons[variant] = sqlite3.connect(DATA / cfg["db"], check_same_thread=False)
+        con.execute("""CREATE TABLE IF NOT EXISTS images(
+            capture_id INTEGER PRIMARY KEY, turtle_name TEXT, file_path TEXT,
+            model TEXT, dim INTEGER, crop_model TEXT, embedded_at TEXT, embedding BLOB)""")
+        done[variant] = {r[0] for r in con.execute(
+            "SELECT capture_id FROM images WHERE embedding IS NOT NULL")}
     boxes = load_boxes()
-    todo = [r for r in rows if int(r["capture_id"]) not in done or int(r["capture_id"]) not in boxes]
-    print(f"{len(rows)} reference photos; {len(boxes)} boxes cached, {len(done)} crops embedded; {len(todo)} to do")
+    todo = [r for r in rows if int(r["capture_id"]) not in boxes
+            or any(int(r["capture_id"]) not in d for d in done.values())]
+    print(f"{len(rows)} reference photos; {len(boxes)} boxes cached; "
+          + ", ".join(f"{len(d)} {v} embedded" for v, d in done.items()) + f"; {len(todo)} to do")
 
     n = no_box = 0
     with ThreadPoolExecutor(WORKERS) as pool:
         futs = [pool.submit(process, client, r, boxes.get(int(r["capture_id"])), done) for r in todo]
         for f in as_completed(futs):
-            cid, row, v, found = f.result()
+            cid, row, vectors, found = f.result()
             no_box += not found
-            if v is not None:
-                with lock:
-                    con.execute("INSERT OR REPLACE INTO images VALUES(?,?,?,?,?,?,?,?)",
-                                (cid, row["turtle_name"], str(crop_path(row).relative_to(ROOT)),
-                                 identify.MODEL, identify.DIM, shellcrop.CROP_MODEL,
-                                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                                 struct.pack(f"<{identify.DIM}f", *v)))
-                    con.commit()
+            with lock:
+                for variant, v in vectors.items():
+                    cons[variant].execute(
+                        "INSERT OR REPLACE INTO images VALUES(?,?,?,?,?,?,?,?)",
+                        (cid, row["turtle_name"], str(crop_path(variant, row).relative_to(ROOT)),
+                         identify.MODEL, identify.DIM, shellcrop.CROP_MODEL,
+                         datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                         struct.pack(f"<{identify.DIM}f", *v)))
+                    cons[variant].commit()
             n += 1
             if n % 50 == 0:
                 print(f"  {n}/{len(todo)}")
