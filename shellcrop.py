@@ -50,13 +50,12 @@ def make_client():
     return genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 
-def detect_box(client, img: Image.Image):
-    """Return [ymin, xmin, ymax, xmax] in 0..1000, or None if no shell found."""
+def _ask_box(client, img: Image.Image, side: int, thinking_level: str):
     from google.genai import types
     small = img.copy()
-    small.thumbnail((DETECT_SIDE, DETECT_SIDE))
+    small.thumbnail((side, side))
     thinking = (types.ThinkingConfig(thinking_budget=0) if CROP_MODEL.startswith("gemini-2")
-                else types.ThinkingConfig(thinking_level="minimal"))
+                else types.ThinkingConfig(thinking_level=thinking_level))
     resp = client.models.generate_content(
         model=CROP_MODEL,
         contents=[types.Part.from_bytes(data=jpeg_bytes(small), mime_type="image/jpeg"), PROMPT],
@@ -76,6 +75,17 @@ def detect_box(client, img: Image.Image):
     if y1 <= y0 or x1 <= x0:
         return None
     return [y0, x0, y1, x1]
+
+
+def detect_box(client, img: Image.Image):
+    """Return [ymin, xmin, ymax, xmax] in 0..1000, or None if no shell found.
+
+    Fast pass first (640px, minimal thinking). On the reference set that pass
+    said "no shell" for 17/633 photos that all clearly showed one, so a miss is
+    retried at full size with a little more thinking.
+    """
+    return (_ask_box(client, img, DETECT_SIDE, "minimal")
+            or _ask_box(client, img, max(img.size), "low"))
 
 
 def crop_to_box(img: Image.Image, box, margin: float = MARGIN) -> Image.Image:
