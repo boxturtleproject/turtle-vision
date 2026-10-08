@@ -24,7 +24,16 @@ from google import genai
 from google.genai import types
 from google.genai import errors as genai_errors
 
-client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+def make_client():
+    """Vertex AI (ADC auth) if GOOGLE_GENAI_USE_VERTEXAI is set, else Gemini API key."""
+    if os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in ("1", "true"):
+        return genai.Client(vertexai=True,
+                            project=os.environ["GOOGLE_CLOUD_PROJECT"],
+                            location=os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1"))
+    return genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
+
+client = make_client()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS images (

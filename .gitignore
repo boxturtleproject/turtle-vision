@@ -32,3 +32,7 @@ download_photos.py
 # Scratch
 /tmp/
 *.log
+
+# Field-test app: uploaded photos + session log (contain new, unpublished photos)
+uploads/
+results/

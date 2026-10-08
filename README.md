@@ -4,10 +4,9 @@ Pipeline that classifies each turtle photo by subject, embeds it with Google's
 multimodal **`gemini-embedding-2-preview`** (3072 dims), and trains a k-NN
 classifier to identify individual turtles from their carapace pattern.
 
-**Prerequisites:** the dataset (`data/<turtle>/<capture_id>.jpg`) is assumed to
-already exist on disk — it's provided out-of-band, not committed to the repo,
-and not pulled by these scripts. See [What's in `data/`](#whats-in-data-after-running-the-pipeline)
-for the expected layout.
+**Prerequisites:** the dataset (`data/<turtle>/<capture_id>.jpg`) is not
+committed. Download it from the live box-turtle-id app with
+`python fetch_data.py` (see [Prerequisites](#prerequisites)).
 
 ## Headline result
 
@@ -72,7 +71,12 @@ data/
 └── ...            # 39 folders total in the reference dataset
 ```
 
-The dataset is provided separately (it's ~330 MB and not committed). The
+Recreate it with `python fetch_data.py` (~250 MB). `capture_id` is the
+`captures.id` in [box-turtle-id](https://github.com/boxturtleproject/box-turtle-id);
+the script downloads each capture's 1280px display derivative — the resolution
+the embeddings were computed on — from the app's public
+`/api/static/captures/derivatives/display/{capture_id}.jpg` endpoint, using
+`data/classifications.csv` as the manifest. Re-running skips existing files. The
 folder name is the individual's identifier and is used as the class label by
 the classifier.
 
@@ -81,7 +85,7 @@ the classifier.
 ## Pipeline
 
 ```
-   data/<turtle_name>/<capture_id>.jpg   [~1000 imgs, provided out-of-band]
+   data/<turtle_name>/<capture_id>.jpg   [~1000 imgs, fetch_data.py]
                         │
                         ▼
    classify_photos.py  ──►  data/classifications.csv              [committed]
@@ -209,13 +213,33 @@ Prints the top-N candidate individuals and the nearest reference images
 (with cosine similarity). Needs `GEMINI_API_KEY` and an existing
 `data/embeddings.sqlite`.
 
+### `app.py` — field-test web app
+Upload a photo (laptop, or a phone on the same Wi-Fi), see the top-5 matching
+individuals with their nearest reference photos, and record a verdict
+(correct / in top 5 / wrong + true name / new turtle / bad photo). Uses the
+same classifier as `identify.py`; uploads are EXIF-rotated, downscaled to
+1280px and re-encoded as JPEG (HEIC supported) before embedding. A "possibly
+a new turtle" cut-off is calibrated at startup by leave-one-out over the
+reference set (override with `--threshold`). Uploads go to `uploads/`, every
+upload and verdict to `results/session_log.csv` (both gitignored).
+
+```bash
+python app.py            # prints localhost + LAN URL
+```
+
+### Gemini via Vertex AI
+`embed_photos.py`, `identify.py` and `app.py` use a Gemini API key by default.
+To bill through Vertex AI instead, set `GOOGLE_GENAI_USE_VERTEXAI=true`,
+`GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` in `.env` and run
+`gcloud auth application-default login` (see `.env.example`).
+
 ---
 
 ## What's in `data/` (after running the pipeline)
 
 | path | committed? | size | description |
 |---|---|---:|---|
-| `data/<turtle>/*.jpg` | no (gitignored) | ~330 MB | image folders, one per individual; **provided out-of-band** |
+| `data/<turtle>/*.jpg` | no (gitignored) | ~330 MB | image folders, one per individual; **downloaded by `fetch_data.py`** |
 | `data/classifications.csv` | **yes** | ~55 KB | `capture_id, turtle_name, file_path, category, media_type, confidence` |
 | `data/splits.csv` | **yes** | ~46 KB | `… , split` (`train`/`valid`/`test`) over carapace photos |
 | `data/predictions.csv` | **yes** | ~5 KB | test-set predictions from `classify.py` (winner on valid) |

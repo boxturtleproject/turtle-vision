@@ -38,12 +38,12 @@ def load_env():
             os.environ.setdefault(k, v)
 
 
-def load_reference(drop):
+def load_reference(drop, db=DB):
     """Return (names, paths, X) for every labeled image we have an embedding for."""
     splits = list(csv.DictReader(SPLITS.open()))
     splits = [r for r in splits if r["turtle_name"] not in drop]
     ids = [int(r["capture_id"]) for r in splits]
-    con = sqlite3.connect(DB)
+    con = sqlite3.connect(db)
     rows = con.execute(
         f"SELECT capture_id, embedding FROM images "
         f"WHERE capture_id IN ({','.join('?'*len(ids))})", ids
@@ -63,10 +63,19 @@ def load_reference(drop):
     return names, paths, X
 
 
-def embed_image(path: Path) -> np.ndarray:
+def make_client():
+    """Vertex AI (ADC auth) if GOOGLE_GENAI_USE_VERTEXAI is set, else Gemini API key."""
     from google import genai
+    if os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in ("1", "true"):
+        return genai.Client(vertexai=True,
+                            project=os.environ["GOOGLE_CLOUD_PROJECT"],
+                            location=os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1"))
+    return genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
+
+def embed_image(path: Path) -> np.ndarray:
     from google.genai import types
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    client = make_client()
     raw = path.read_bytes()
     mt = mimetypes.guess_type(str(path))[0] or "image/jpeg"
     result = client.models.embed_content(
@@ -156,8 +165,8 @@ def main():
         ap.error(f"missing {SPLITS} — run make_splits.py first")
 
     load_env()
-    if not os.environ.get("GEMINI_API_KEY"):
-        ap.error("GEMINI_API_KEY not set (see .env)")
+    if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_GENAI_USE_VERTEXAI")):
+        ap.error("set GEMINI_API_KEY or GOOGLE_GENAI_USE_VERTEXAI (see .env)")
 
     pred = identify(args.image, args.top, args.pca, args.k, args.whiten)
     print(f"\nPredicted: {pred}")
