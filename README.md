@@ -20,6 +20,31 @@ committed. Download it from the live box-turtle-id app with
 
 See [`predictions_pca.csv`](data/predictions_pca.csv) for per-image predictions.
 
+### Different-day result (`python evaluate.py`)
+
+The split above is per photo, so a test photo can match a photo of the same
+turtle taken minutes earlier, with the same background and light. That
+inflates scores. `evaluate.py` scores every photo only against *other days*
+of its turtle (609 queries; dates from `fetch_meta.py`), which is what a new
+sighting looks like:
+
+| matcher | top-1 | top-5 |
+|---|---:|---:|
+| whole photo, PCA | 0.544 | 0.782 |
+| shell crop, PCA | 0.548 | 0.783 |
+| tight crop, PCA | 0.583 | 0.821 |
+| tight crop, LDA | 0.604 | 0.878 |
+| **combined: crop + tight, LDA** | **0.670** | **0.908** |
+
+LDA (in `matching.py`) is PCA → 128 followed by Linear Discriminant Analysis
+fit on turtle names, scored out-of-fold over (turtle, day) groups. Also tried
+and not adopted: scoring a turtle by the mean of its top 2–5 photos (no
+gain), favouring same-view photos (no gain), restricting to same view (worse).
+
+"New turtle" detection is weak across days: known and new turtles' best-match
+similarities overlap heavily. At a cut-off that still recognises 80% of known
+turtles, the combined matcher flags 16% of new ones.
+
 ---
 
 ## Quick start
@@ -229,18 +254,30 @@ crops it two ways and embeds each (full frame if no shell is found):
 
 Resume-safe. The crop logic lives in `shellcrop.py` and is shared with `app.py`.
 
+### `fetch_meta.py`
+Writes `data/capture_meta.csv` (committed): date and view (`carapace_top`,
+`carapace_left`, `front`, `plastron`, …) for every manifest capture, from
+box-turtle-id's public turtle endpoint. Used by `evaluate.py` and `app.py` to
+score and calibrate on other-day photos.
+
+### `evaluate.py`
+The different-day comparison above, for every matcher. Re-run it as photos are
+added. Shared maths (PCA / LDA projections, out-of-fold similarities,
+cut-off calibration, ranking) lives in `matching.py`.
+
 ### `app.py` — field-test web app
-Upload a photo (laptop, or a phone on the same Wi-Fi) and compare two matchers
-side by side: **whole photo**, **cropped to shell** and **tight (inside
-shell)** — the upload is cropped on the fly with the same Gemini box prompt. Each column shows the top-5
-individuals with their nearest reference photos and a "possibly new turtle"
-flag (cut-off calibrated per matcher at startup by leave-one-out). Record the
-true answer once — which turtle / new turtle / bad photo — and the app scores
-every matcher (top-1, top-5, new turtles flagged, known turtles wrongly
-flagged). Uploads are EXIF-rotated, downscaled to 1280px and re-encoded as JPEG
-(HEIC supported). `/crops` shows every reference crop for review. Uploads go
-to `uploads/`, every upload and verdict to `results/session_log.csv` (both
-gitignored).
+Upload a photo (laptop, or a phone on the same Wi-Fi) and compare matchers
+side by side: **combined** (crop + tight, LDA; shown first), **whole photo**,
+**cropped to shell** and **tight (inside shell)**. The upload is cropped on
+the fly with the same Gemini box prompt. Each column shows the top-5
+individuals with their nearest reference photos and a "weak match, could be a
+new turtle" banner. The cut-off is calibrated per matcher at startup on
+out-of-fold, other-day similarities, set to still recognise 80% of known
+turtles (`--keep-known`). Record the true answer once (which turtle / new
+turtle / bad photo) and the app scores every matcher. Uploads are
+EXIF-rotated, downscaled to 1280px and re-encoded as JPEG (HEIC supported).
+`/crops` shows every reference crop for review. Uploads go to `uploads/`,
+every upload and verdict to `results/session_log.csv` (both gitignored).
 
 ```bash
 python app.py            # prints localhost + LAN URL; --no-crop for full-frame only
