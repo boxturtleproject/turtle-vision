@@ -44,10 +44,11 @@ copy.
 | SIFT spot match on the shell crop, any view (`sift_match.py`) | 0.815 | 0.878 |
 | **SIFT + combined embeddings** (`matching.fuse`) | **0.852** | **0.925** |
 
-With whole-photo SIFT, Gemini choosing among the SIFT + embeddings top 5
-lifted top-1 from 0.837 to 0.867 (fixed 31, broke 15); choosing among SIFT's
-own top 5 gave 0.835. Not yet measured on shell-crop SIFT, where the fused
-top-1 starts at 0.852.
+Gemini choosing among the SIFT + embeddings top 5 adds little: 0.852 → 0.863
+top-1 (fixed 24, broke 18), within noise for ~3.5s and an API call per photo.
+With whole-photo SIFT, where the fused top-1 starts lower, it helped more
+(0.837 → 0.867); choosing among SIFT's own top 5 gave 0.835. The app shows it
+as a second opinion next to SIFT + embeddings.
 
 SIFT is box-turtle-id's matcher (`backend/app/services/sift.py`), ported:
 keypoints at 250px wide, ratio test 0.67, score = good matches / fewest
@@ -308,11 +309,11 @@ crop features are cached in `data/sift_crop250.pkl` (gitignored, ~70 MB).
 Upload a photo (laptop, or a phone on the same Wi-Fi) and compare matchers
 side by side, best first:
 
-- **Gemini pick**: Gemini choosing among the SIFT + embeddings top 5; its
-  banner re-checks the SIFT score of the turtle Gemini picked. Adds ~3.5s;
-  `--no-gemini` to skip.
-- **SIFT + embeddings**: the two added up (`matching.fuse`). Its banner uses
-  the SIFT rule below.
+- **SIFT + embeddings** (best): the two added up (`matching.fuse`). Its
+  banner uses the SIFT rule below.
+- **Gemini pick** (second opinion): Gemini choosing among the SIFT +
+  embeddings top 5, with a one-line reason; its banner re-checks the SIFT
+  score of the turtle Gemini picked. Adds ~3.5s; `--no-gemini` to skip.
 - **Spot match**: SIFT on the shell crop against every reference crop. A
   score of 4+ confirms a known turtle; below that the banner says it could be
   new, or a view we don't have. `--no-sift` to skip.

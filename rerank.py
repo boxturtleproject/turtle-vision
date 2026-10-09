@@ -9,7 +9,8 @@ matcher's top 5 with gemini-3.6-flash raised top-1 from 0.551 to 0.717
 (534 queries; fixed 115, broke 26; ~3.4s and ~9k input tokens per query).
 More thinking (medium) and gemini-3.1-pro-preview did not do better on a
 120-query sample. Choosing among the SIFT + embeddings top 5 instead
-(app.py's default) lifted top-1 from 0.837 to 0.867 with whole-photo SIFT.
+(app.py's default) barely helps with shell-crop SIFT: 0.852 -> 0.863
+(fixed 24, broke 18); with whole-photo SIFT 0.837 -> 0.867.
 
 It cannot tell a new turtle: with the true turtle removed from the
 candidates it still picked one with ~0.98 confidence, so "same_as_any" and
