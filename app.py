@@ -4,11 +4,11 @@ Upload a carapace photo (from a laptop or a phone on the same Wi-Fi) and see
 the closest known individuals from several matchers side by side:
 
   gemini   — the combined matcher's top 5, re-ranked by Gemini comparing the
-             shell photos (rerank.py). Best on the different-day test: ~81%
+             shell photos (rerank.py). Best on the different-day test: ~72%
              top-1. Adds ~3.5s per upload.
   combined — crop + tight embeddings, each projected with LDA (learned from
-             turtle names), similarities averaged. Best on the different-day
-             test (evaluate.py): ~67% top-1, ~91% top-5.
+             turtle names), similarities averaged. Best embedding matcher on
+             the different-day test (evaluate.py): ~55% top-1, ~84% top-5.
   full     — embed the whole photo, PCA -> 128
   crop     — crop to the shell with a Gemini bounding box (+5% margin), PCA
   tight    — same box, keep only its central 71% (all shell), PCA

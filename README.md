@@ -24,32 +24,36 @@ See [`predictions_pca.csv`](data/predictions_pca.csv) for per-image predictions.
 
 The split above is per photo, so a test photo can match a photo of the same
 turtle taken minutes earlier, with the same background and light. That
-inflates scores. `evaluate.py` scores every photo only against *other days*
-of its turtle (609 queries; dates from `fetch_meta.py`), which is what a new
-sighting looks like:
+inflates scores. `evaluate.py` scores every photo only against *other
+sightings* of its turtle (534 queries; dates from `fetch_meta.py`), which is
+what a new sighting looks like. Photos that box-turtle-id holds twice under
+different dates (66 sets of byte-identical files, plus repeated original
+filenames) are merged into one sighting, so a photo never matches its own
+copy.
 
 | matcher | top-1 | top-5 |
 |---|---:|---:|
-| whole photo, PCA | 0.544 | 0.782 |
-| shell crop, PCA | 0.548 | 0.783 |
-| tight crop, PCA | 0.583 | 0.821 |
-| tight crop, LDA | 0.604 | 0.878 |
-| combined: crop + tight, LDA | 0.670 | 0.908 |
-| **combined top 5, re-ranked by Gemini** (`rerank.py`) | **0.808** | 0.908 |
+| whole photo, PCA | 0.388 | 0.684 |
+| shell crop, PCA | 0.395 | 0.682 |
+| tight crop, PCA | 0.440 | 0.740 |
+| tight crop, LDA | 0.489 | 0.796 |
+| combined: crop + tight, LDA | 0.551 | 0.839 |
+| **combined top 5, re-ranked by Gemini** (`rerank.py`) | **0.717** | 0.839 |
 
 LDA (in `matching.py`) is PCA → 128 followed by Linear Discriminant Analysis
 fit on turtle names, scored out-of-fold over (turtle, day) groups. Gemini
 re-ranking sends the query and 3 reference shell crops for each of the
 combined matcher's top 5 turtles to `gemini-3.6-flash` and asks which is the
-same individual (fixed 108 queries, broke 24; ~3.4s, ~9k input tokens each;
+same individual (fixed 115 queries, broke 26; ~3.4s, ~9k input tokens each;
 re-run with `python evaluate.py --gemini N`). It can't flag a new turtle:
 with the true turtle removed it still picks one at ~0.98 confidence. Also tried
 and not adopted: scoring a turtle by the mean of its top 2–5 photos (no
 gain), favouring same-view photos (no gain), restricting to same view (worse).
 
-"New turtle" detection is weak across days: known and new turtles' best-match
-similarities overlap heavily. At a cut-off that still recognises 80% of known
-turtles, the combined matcher flags 16% of new ones.
+"New turtle" detection by similarity barely works across days: known and new
+turtles' best-match similarities overlap almost completely. At a cut-off that
+still recognises 80% of known turtles, the combined matcher flags only 5% of
+new ones.
 
 ---
 
