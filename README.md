@@ -41,13 +41,13 @@ copy.
 | combined top 5, re-ranked by Gemini (`rerank.py`) | 0.717 | 0.839 |
 | SIFT spot match, whole photo, same view (box-turtle-id as deployed) | 0.790 | 0.841 |
 | SIFT spot match, whole photo, any view | 0.788 | 0.867 |
-| SIFT spot match on the shell crop, any view (`sift_match.py`) | 0.811 | 0.875 |
-| **SIFT + combined embeddings** (`matching.fuse`) | **0.861** | **0.916** |
+| SIFT spot match on the shell crop, any view (`sift_match.py`) | 0.815 | 0.878 |
+| **SIFT + combined embeddings** (`matching.fuse`) | **0.852** | **0.925** |
 
 With whole-photo SIFT, Gemini choosing among the SIFT + embeddings top 5
 lifted top-1 from 0.837 to 0.867 (fixed 31, broke 15); choosing among SIFT's
 own top 5 gave 0.835. Not yet measured on shell-crop SIFT, where the fused
-top-1 starts at 0.861.
+top-1 starts at 0.852.
 
 SIFT is box-turtle-id's matcher (`backend/app/services/sift.py`), ported:
 keypoints at 250px wide, ratio test 0.67, score = good matches / fewest
@@ -55,7 +55,7 @@ keypoints × 100. It compares against *every* reference photo, so unlike the
 re-rankers it isn't capped by the embedding shortlist, and it doesn't need
 the photo's view. Its score is also the best "new turtle" signal here: at
 box-turtle-id's cut-off of 4, the best wrong turtle reaches it for ~2% of
-queries and the right turtle for ~56% on shell crops (41% on whole photos,
+queries and the right turtle for ~58% on shell crops (41% on whole photos,
 which is why the app crops first). Adding up the evidence, each turtle
 scored by log(1 + best SIFT score) + best combined-embedding similarity,
 beats either alone: SIFT is decisive when spots match and the embeddings
