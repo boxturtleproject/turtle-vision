@@ -34,10 +34,16 @@ sighting looks like:
 | shell crop, PCA | 0.548 | 0.783 |
 | tight crop, PCA | 0.583 | 0.821 |
 | tight crop, LDA | 0.604 | 0.878 |
-| **combined: crop + tight, LDA** | **0.670** | **0.908** |
+| combined: crop + tight, LDA | 0.670 | 0.908 |
+| **combined top 5, re-ranked by Gemini** (`rerank.py`) | **0.808** | 0.908 |
 
 LDA (in `matching.py`) is PCA → 128 followed by Linear Discriminant Analysis
-fit on turtle names, scored out-of-fold over (turtle, day) groups. Also tried
+fit on turtle names, scored out-of-fold over (turtle, day) groups. Gemini
+re-ranking sends the query and 3 reference shell crops for each of the
+combined matcher's top 5 turtles to `gemini-3.6-flash` and asks which is the
+same individual (fixed 108 queries, broke 24; ~3.4s, ~9k input tokens each;
+re-run with `python evaluate.py --gemini N`). It can't flag a new turtle:
+with the true turtle removed it still picks one at ~0.98 confidence. Also tried
 and not adopted: scoring a turtle by the mean of its top 2–5 photos (no
 gain), favouring same-view photos (no gain), restricting to same view (worse).
 
@@ -267,7 +273,9 @@ cut-off calibration, ranking) lives in `matching.py`.
 
 ### `app.py` — field-test web app
 Upload a photo (laptop, or a phone on the same Wi-Fi) and compare matchers
-side by side: **combined** (crop + tight, LDA; shown first), **whole photo**,
+side by side: **Gemini pick** (combined top 5 re-ranked by Gemini; shown
+first, adds ~3.5s, `--no-gemini` to skip), **combined** (crop + tight, LDA),
+**whole photo**,
 **cropped to shell** and **tight (inside shell)**. The upload is cropped on
 the fly with the same Gemini box prompt. Each column shows the top-5
 individuals with their nearest reference photos and a "weak match, could be a
