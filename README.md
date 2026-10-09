@@ -306,8 +306,13 @@ crop features are cached in `data/sift_crop250.pkl` (gitignored, ~70 MB).
 `python evaluate.py --sift` re-runs its different-day test.
 
 ### `app.py` — field-test web app
-Upload a photo (laptop, or a phone on the same Wi-Fi) and compare matchers
-side by side, best first:
+Upload a photo, or several photos of one turtle (top, left and right of the
+shell), from a laptop or a phone on the same Wi-Fi. Several photos are
+matched in parallel and combined into one answer by adding up each turtle's
+SIFT + embeddings score across them: on the different-day test, a whole
+sighting got 0.93 top-1 against 0.85 for one photo (0.97 with 4+ photos).
+The result shows **All photos combined** first, then each photo's own best
+guess. For a single photo, matchers are side by side, best first:
 
 - **SIFT + embeddings** (best): the two added up (`matching.fuse`). Its
   banner uses the SIFT rule below.
@@ -322,10 +327,16 @@ side by side, best first:
   banner whose cut-off is calibrated at startup on out-of-fold, other-day
   similarities to still recognise 80% of known turtles (`--keep-known`).
 
+Photo type matters: on the different-day test, shell views (top, left,
+right) were right first time 87–93% of the time, front 71%, back and rear
+under 50%. A photo whose view the turtle has on file from another day was
+right 91% of the time, against 33% without one.
+
 The upload is cropped on the fly with the same Gemini box prompt. Each column
 shows the top-5 individuals with their nearest reference photos. Record the
 true answer once (which turtle / new turtle / bad photo) and the app scores
-every matcher. Uploads are EXIF-rotated, downscaled to 1280px and re-encoded
+every matcher; for a multi-photo upload the answer applies to the combined
+result and to each photo. Uploads are EXIF-rotated, downscaled to 1280px and re-encoded
 as JPEG (HEIC supported). `/crops` shows every reference crop for review.
 Uploads go to `uploads/`, every upload and verdict to
 `results/session_log.csv` (both gitignored).

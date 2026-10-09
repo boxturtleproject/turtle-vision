@@ -1,7 +1,10 @@
 """Local web app for field-testing turtle identification.
 
-Upload a carapace photo (from a laptop or a phone on the same Wi-Fi) and see
-the closest known individuals from several matchers side by side:
+Upload a carapace photo, or several photos of one turtle (top/left/right),
+from a laptop or a phone on the same Wi-Fi. Several photos are combined into
+one answer (each turtle's fused score added up across photos; 0.93 top-1 vs
+0.85 for one photo on the different-day test), shown before each photo's own
+best guess. A single photo shows these matchers side by side:
 
   best     — SIFT + combined embeddings: each turtle scored by
              log(1 + best SIFT score) + best embedding similarity
@@ -137,10 +140,11 @@ def session_stats():
     rows = list(csv.DictReader(LOG.open()))
     preds = {(r["upload_id"], r["method"]): r for r in rows if r["event"] == "identify"}
     truth = {r["upload_id"]: r for r in rows if r["event"] == "feedback"}  # last wins
-    stats = {"uploads": len({u for u, _ in preds}), "scored": len(truth), "bad_photo": 0, "methods": {}}
+    stats = {"uploads": len({u for u, m in preds if m != "sighting"}),
+             "scored": len({u for u in truth if not u.startswith("S")}), "bad_photo": 0, "methods": {}}
     for uid, fb in truth.items():
         if fb["verdict"] == "bad_photo":
-            stats["bad_photo"] += 1
+            stats["bad_photo"] += not uid.startswith("S")
             continue
         for (u, method), p in preds.items():
             if u != uid:
@@ -168,6 +172,12 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
     crop_client = shellcrop.make_client()
     pool = ThreadPoolExecutor(4)
     embed_pool = ThreadPoolExecutor(4)  # crop variants embed in parallel once the box is known
+    photo_pool = ThreadPoolExecutor(4)  # photos of one sighting run in parallel
+    sightings: dict[str, list[str]] = {}  # sighting id -> photo upload ids (restored from the log)
+    if LOG.exists():
+        for r in csv.DictReader(LOG.open()):
+            if r["method"] == "sighting" and r["notes"].startswith("photos "):
+                sightings[r["upload_id"]] = r["notes"][len("photos "):].split(";")
     needed = set().union(*(sources_of(m) for m in matchers.values()))
     crop_variants = [v for v in shellcrop.VARIANTS if v in needed]
     classes = sorted(set().union(*(m.classes for m in [*matchers.values(), *([sift] if sift else [])])))
@@ -203,15 +213,15 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
                 sift_job = embed_pool.submit(sift.query_scores, cpath)
         return box, out, sift_job
 
-    @app.post("/api/identify")
-    def identify_upload(image: UploadFile = File(...)):
+    def process_photo(raw: bytes, filename: str, upload_id: str):
+        """Run every matcher on one photo. Returns its results, log rows, and the
+        per-reference evidence (fused + SIFT scores) for combining a sighting."""
         try:
-            img = ImageOps.exif_transpose(Image.open(io.BytesIO(image.file.read())))
+            img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw)))
         except Exception:
-            raise HTTPException(400, "could not read that image")
+            raise HTTPException(400, f"could not read {filename}")
         img = img.convert("RGB")
         img.thumbnail((MAX_SIDE, MAX_SIDE))
-        upload_id = datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
         path = UPLOADS / f"{upload_id}.jpg"
         img.save(path, "JPEG", quality=85)
 
@@ -248,18 +258,22 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
                                    "likely_new": m[0]["sim"] < sift.threshold, "threshold": sift.threshold,
                                    "scale": "spot-match score"}
                 log_rows.append({"upload_id": upload_id, "event": "identify", "method": "sift",
-                                 "filename": image.filename, "box": box or "",
+                                 "filename": filename, "box": box or "",
                                  "top1": m[0]["name"], "top1_sim": m[0]["sim"],
                                  "top5": ";".join(f"{x['name']}:{x['sim']}" for x in m),
                                  "likely_new": int(results["sift"]["likely_new"])})
             except Exception as e:
                 results["sift"] = {"error": f"SIFT failed: {str(e)[:250]}"}
         comb = matchers.get("combined")
+        evidence = None
         if s_sift is not None and comb and not (sources_of(comb) - vecs.keys()):
-            results = {"best": best_guess(s_sift, comb.sims(vecs), images["crop"], box), **results}
+            s_emb = comb.sims(vecs)
+            fused = matching.fuse(s_sift, s_emb, sift_cidx, len(sift.classes))
+            evidence = {"fused": fused, "sift": s_sift}
+            results = {"best": best_guess(fused, s_sift, s_emb, images["crop"], box), **results}
             b = results["best"]
             log_rows.insert(0, {"upload_id": upload_id, "event": "identify", "method": "best",
-                                "filename": image.filename, "box": "",
+                                "filename": filename, "box": "",
                                 "top1": b["matches"][0]["name"], "top1_sim": b["matches"][0]["sim"],
                                 "top5": ";".join(f"{x['name']}:{x['sim']}" for x in b["matches"]),
                                 "likely_new": int(b["likely_new"]), "notes": f"spot {b['spot']}"})
@@ -274,7 +288,7 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
                  "threshold": round(matcher.threshold, 3)}
             results[method] = r
             log_rows.append({"upload_id": upload_id, "event": "identify", "method": method,
-                             "filename": image.filename, "box": r["box"] or "",
+                             "filename": filename, "box": r["box"] or "",
                              "top1": m[0]["name"], "top1_sim": m[0]["sim"],
                              "top5": ";".join(f"{x['name']}:{x['sim']}" for x in m),
                              "likely_new": int(r["likely_new"])})
@@ -287,16 +301,66 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
             if "matches" in g:
                 m = g["matches"]
                 log_rows.insert(0, {"upload_id": upload_id, "event": "identify", "method": "gemini",
-                                    "filename": image.filename, "box": g["box"] or "",
+                                    "filename": filename, "box": g["box"] or "",
                                     "top1": m[0]["name"], "top1_sim": m[0]["sim"],
                                     "top5": ";".join(f"{x['name']}:{x['sim']}" for x in m),
                                     "likely_new": int(g["likely_new"]), "notes": g["reason"]})
-        log(log_rows)
-        return {"upload_id": upload_id, "image": f"/uploads/{path.name}", "methods": results}
+        return {"upload_id": upload_id, "image": f"/uploads/{path.name}", "methods": results,
+                "log_rows": log_rows, "evidence": evidence}
 
-    def best_guess(s_sift, s_emb, image_url, box, top=5, per_class=3):
-        """Fuse SIFT and combined-embedding evidence per turtle (matching.fuse)."""
-        fused = matching.fuse(s_sift, s_emb, sift_cidx, len(sift.classes))
+    @app.post("/api/identify")
+    def identify_upload(images: list[UploadFile] = File(...)):
+        """One photo, or several photos of the same turtle (one sighting).
+
+        Several photos are matched in parallel and combined by adding up each
+        turtle's fused score across them; on the different-day test that took
+        top-1 from 0.85 (one photo) to 0.93 (whole sighting).
+        """
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-")
+        jobs = [(f.file.read(), f.filename, stamp + uuid.uuid4().hex[:6]) for f in images]
+        photos = list(photo_pool.map(lambda a: process_photo(*a), jobs))
+        rows = [r for p in photos for r in p["log_rows"]]
+        if len(photos) == 1:
+            log(rows)
+            return {k: photos[0][k] for k in ("upload_id", "image", "methods")}
+        sid = "S" + stamp + uuid.uuid4().hex[:6]
+        ids = [p["upload_id"] for p in photos]
+        sightings[sid] = ids
+        methods = {}
+        with_evidence = [p for p in photos if p["evidence"]]
+        if with_evidence:
+            m = methods["sighting"] = combine_sighting(with_evidence)
+            rows.append({"upload_id": sid, "event": "identify", "method": "sighting",
+                         "filename": f"{len(with_evidence)} photos", "box": "",
+                         "top1": m["matches"][0]["name"], "top1_sim": m["matches"][0]["sim"],
+                         "top5": ";".join(f"{x['name']}:{x['sim']}" for x in m["matches"]),
+                         "likely_new": int(m["likely_new"]), "notes": "photos " + ";".join(ids)})
+        for k, p in enumerate(photos, 1):
+            per = p["methods"]
+            methods[f"photo{k}"] = per.get("best") or next(iter(per.values()))
+        log(rows)
+        return {"upload_id": sid, "image": photos[0]["image"],
+                "images": [p["image"] for p in photos], "methods": methods}
+
+    def combine_sighting(photos, top=5, per_class=3):
+        """Add up each turtle's fused score across photos; refs = best SIFT photos over all."""
+        F = sum(p["evidence"]["fused"] for p in photos)
+        S = np.max(np.stack([p["evidence"]["sift"] for p in photos]), 0)
+        matches = []
+        for k in np.argsort(-F)[:top]:
+            mine = np.flatnonzero(sift_cidx == k)
+            mine = mine[np.argsort(-S[mine])][:per_class]
+            matches.append({"name": sift.classes[k], "sim": round(float(F[k]), 2),
+                            "refs": [{"path": sift.paths[j], "sim": round(float(S[j]), 1)} for j in mine]})
+        spot = round(float(S[sift_cidx == sift.classes.index(matches[0]["name"])].max()), 1)
+        return {"image": photos[0]["methods"]["best"]["image"], "box": None, "matches": matches,
+                "spot": spot, "likely_new": spot < sift.threshold, "threshold": sift.threshold,
+                "n_photos": len(photos)}
+
+
+
+    def best_guess(fused, s_sift, s_emb, image_url, box, top=5, per_class=3):
+        """Rank turtles by fused SIFT + combined-embedding evidence (matching.fuse)."""
         matches = []
         for k in np.argsort(-fused)[:top]:
             mine = np.flatnonzero(sift_cidx == k)
@@ -330,8 +394,9 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
             raise HTTPException(400, "unknown verdict")
         if verdict == "known" and not true_name:
             raise HTTPException(400, "known turtle needs a name")
-        log([{"upload_id": upload_id, "event": "feedback", "verdict": verdict,
-              "true_name": true_name, "notes": notes}])
+        ids = [upload_id, *sightings.get(upload_id, [])]  # a sighting's answer applies to each photo
+        log([{"upload_id": u, "event": "feedback", "verdict": verdict, "true_name": true_name,
+              "notes": notes} for u in ids])
         return {"stats": session_stats()}
 
     return app
@@ -380,7 +445,7 @@ h1{font-size:22px;margin:4px 0 2px}.sub{color:var(--muted);font-size:13px;margin
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px}
 label.drop{display:block;border:2px dashed var(--line);border-radius:12px;padding:22px;text-align:center;cursor:pointer;color:var(--muted)}
 label.drop b{color:var(--accent)}input[type=file]{display:none}
-.query{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap}.query>img{width:200px;max-width:100%;border-radius:8px}
+.query{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap}.qimgs{display:flex;gap:6px;flex-wrap:wrap}.qimgs img{width:160px;max-width:100%;border-radius:8px}
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
 .col h2{font-size:16px;margin:0 0 8px}.cropimg{display:block;margin-bottom:8px}.cropimg img{max-height:180px;max-width:100%;border-radius:8px}
 .banner{padding:8px 10px;border-radius:8px;font-weight:600;font-size:14px;margin:6px 0}
@@ -397,19 +462,20 @@ table{border-collapse:collapse;font-size:14px;width:100%}th,td{text-align:left;p
 <h1>Turtle ID</h1>
 <div class="sub"><span id="meta">loading…</span> · <a href="/crops" target="_blank">review reference crops</a></div>
 <div class="card">
-  <label class="drop"><input id="file" type="file" accept="image/*"><b>Choose or take a photo</b><br>top of the shell, filling the frame</label>
+  <label class="drop"><input id="file" type="file" accept="image/*" multiple><b>Choose or take photos of one turtle</b><br>top, left and right of the shell, filling the frame. Several photos are combined.</label>
 </div>
 <div id="result"></div>
 <div class="card" id="stats"></div>
 </main><script>
 let INFO, CUR, TRUTH;
-const LABEL = {best: 'SIFT + embeddings (best)', gemini: 'Gemini pick (second opinion)', sift: 'Spot match (SIFT)', combined: 'Combined', full: 'Whole photo', crop: 'Cropped to shell', tight: 'Tight (inside shell)'};
+const LABEL = {sighting: 'All photos combined (best)', best: 'SIFT + embeddings (best)', gemini: 'Gemini pick (second opinion)', sift: 'Spot match (SIFT)', combined: 'Combined', full: 'Whole photo', crop: 'Cropped to shell', tight: 'Tight (inside shell)'};
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const label = m => LABEL[m] || (m.startsWith('photo') ? `Photo ${m.slice(5)} alone` : m);
 const pct = (a, b) => b ? `${a}/${b} (${Math.round(100*a/b)}%)` : '–';
 function showStats(s){
   if(!s || !s.uploads){ $('stats').innerHTML = '<span class="muted">No uploads yet this session.</span>'; return; }
-  const rows = Object.entries(s.methods || {}).map(([m, x]) => `<tr><td>${LABEL[m]||m}</td>
+  const rows = Object.entries(s.methods || {}).map(([m, x]) => `<tr><td>${label(m)}</td>
     <td>${pct(x.top1, x.known)}</td><td>${pct(x.top5, x.known)}</td>
     <td>${pct(x.new_flagged, x.new)}</td><td>${pct(x.known_flagged_new, x.known)}</td></tr>`).join('');
   $('stats').innerHTML = `<div class="muted" style="margin-bottom:6px">Session: ${s.uploads} uploaded, ${s.scored} scored${s.bad_photo ? `, ${s.bad_photo} bad photos` : ''}</div>
@@ -418,20 +484,20 @@ function showStats(s){
 async function load(){
   INFO = await (await fetch('/api/info')).json();
   $('meta').textContent = `${INFO.classes.length} known turtles · ` + Object.entries(INFO.methods).map(([m, x]) =>
-    `${LABEL[m]}: ${x.n_ref} refs, "new" below ${x.threshold}`).join(' · ');
+    `${label(m)}: ${x.n_ref} refs, "new" below ${x.threshold}`).join(' · ');
   showStats(INFO.stats);
 }
 $('file').onchange = async e => {
-  const f = e.target.files[0]; if(!f) return;
-  $('result').innerHTML = '<div class="card">Cropping, embedding and matching…</div>';
-  const fd = new FormData(); fd.append('image', f);
+  const files = [...e.target.files]; if(!files.length) return;
+  $('result').innerHTML = `<div class="card">Cropping, embedding and matching ${files.length > 1 ? files.length + ' photos' : ''}…</div>`;
+  const fd = new FormData(); files.forEach(f => fd.append('images', f));
   const r = await fetch('/api/identify', {method:'POST', body:fd});
   e.target.value = '';
   if(!r.ok){ $('result').innerHTML = `<div class="card err">${esc((await r.json()).detail || 'failed')}</div>`; return; }
   CUR = await r.json(); TRUTH = null; render();
 };
 function column(method, r){
-  if(r.error) return `<div class="card col"><h2>${LABEL[method]}</h2><p class="err">${esc(r.error)}</p></div>`;
+  if(r.error) return `<div class="card col"><h2>${label(method)}</h2><p class="err">${esc(r.error)}</p></div>`;
   const m = r.matches;
   const spot = r.spot ?? m[0].sim;
   const banner = (method === 'sift' || r.spot !== undefined)
@@ -448,12 +514,13 @@ function column(method, r){
       <div class="refs">${x.refs.map(rf => `<img loading="lazy" src="/${esc(rf.path)}" title="${rf.sim}">`).join('')}</div>
     </div>`).join('');
   const reason = r.reason ? `<p class="muted">Gemini: ${esc(r.reason)}</p>` : '';
-  return `<div class="card col"><h2>${LABEL[method]}${method !== 'full' && !r.box ? ' <span class="muted">(no shell found)</span>' : ''}</h2>${thumb}${banner}${reason}${rows}</div>`;
+  return `<div class="card col"><h2>${label(method)}${method !== 'full' && !r.box ? ' <span class="muted">(no shell found)</span>' : ''}</h2>${thumb}${banner}${reason}${rows}</div>`;
 }
 function render(){
   const opts = INFO.classes.map(c => `<option>${esc(c)}</option>`).join('');
-  $('result').innerHTML = `<div class="card"><div class="query"><img src="${CUR.image}">
-      <div style="flex:1;min-width:240px"><b>What is it really?</b>
+  const queryImgs = (CUR.images || [CUR.image]).map(u => `<img src="${u}">`).join('');
+  $('result').innerHTML = `<div class="card"><div class="query"><div class="qimgs">${queryImgs}</div>
+      <div style="flex:1;min-width:240px"><b>${CUR.images ? 'Which turtle are these photos of?' : 'What is it really?'}</b>
         <div class="muted">Tap "This is it" on the right turtle below, or:</div>
         <div class="row"><select id="truename"><option value="">Not in either list — pick…</option>${opts}</select>
           <button onclick="send('known', $('truename').value)">Save</button></div>
