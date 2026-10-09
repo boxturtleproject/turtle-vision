@@ -17,7 +17,7 @@ Cropping costs the ~1.3s box call but confirms many more known turtles:
 without background, more matched spots are on the shell.
 
 Score >= 4 is strong evidence: the best *wrong* turtle reaches it for ~2%
-of queries, the right turtle for ~56%. So "nothing scored 4+" flags most new
+of queries, the right turtle for ~58%. So "nothing scored 4+" flags most new
 turtles, at the cost of leaving many known turtles unconfirmed.
 """
 import pickle
