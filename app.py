@@ -3,12 +3,22 @@
 Upload a carapace photo (from a laptop or a phone on the same Wi-Fi) and see
 the closest known individuals from several matchers side by side:
 
-  gemini   — the combined matcher's top 5, re-ranked by Gemini comparing the
-             shell photos (rerank.py). Best on the different-day test: ~81%
-             top-1. Adds ~3.5s per upload.
+  best     — SIFT + combined embeddings: each turtle scored by
+             log(1 + best SIFT score) + best embedding similarity
+             (matching.fuse). Best on the different-day test. Its banner uses
+             the SIFT rule: the top turtle's spot-match score >= 4 confirms it.
+  sift     — box-turtle-id's SIFT spot matcher on the shell crop against every
+             reference crop (sift_match.py). ~81% top-1 on the different-day
+             test. Score >= 4 confirms a known turtle; below that the banner
+             says it could be new.
+  gemini   — Gemini choosing among the best-guess top 5 by comparing the shell
+             photos (rerank.py). On the different-day test with whole-photo
+             SIFT it lifted the fused top-1 from 0.837 to 0.867 (fixed 31,
+             broke 15). Falls back to the combined top 5 without SIFT. Adds
+             ~3.5s per upload.
   combined — crop + tight embeddings, each projected with LDA (learned from
-             turtle names), similarities averaged. Best on the different-day
-             test (evaluate.py): ~67% top-1, ~91% top-5.
+             turtle names), similarities averaged. Best embedding matcher on
+             the different-day test (evaluate.py): ~55% top-1, ~84% top-5.
   full     — embed the whole photo, PCA -> 128
   crop     — crop to the shell with a Gemini bounding box (+5% margin), PCA
   tight    — same box, keep only its central 71% (all shell), PCA
@@ -27,6 +37,7 @@ turtles overlap heavily, so by default the cut-off is set to still recognise
     python app.py --no-crop       # whole-photo matcher only
     python app.py --keep-known 0.9
     python app.py --no-gemini     # skip the Gemini re-rank column
+    python app.py --no-sift       # skip the SIFT spot-match column
 """
 import argparse, csv, html, io, socket, uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -45,6 +56,7 @@ import identify
 import matching
 import rerank
 import shellcrop
+import sift_match
 
 register_heif_opener()  # iPhone HEIC uploads
 
@@ -148,7 +160,7 @@ def session_stats():
     return stats
 
 
-def build_app(matchers: dict, use_gemini: bool = True) -> FastAPI:
+def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
     app = FastAPI()
     UPLOADS.mkdir(exist_ok=True)
     app.mount("/data", StaticFiles(directory=identify.DATA), name="data")
@@ -158,7 +170,10 @@ def build_app(matchers: dict, use_gemini: bool = True) -> FastAPI:
     embed_pool = ThreadPoolExecutor(4)  # crop variants embed in parallel once the box is known
     needed = set().union(*(sources_of(m) for m in matchers.values()))
     crop_variants = [v for v in shellcrop.VARIANTS if v in needed]
-    classes = sorted(set().union(*(m.classes for m in matchers.values())))
+    classes = sorted(set().union(*(m.classes for m in [*matchers.values(), *([sift] if sift else [])])))
+    if sift and "combined" in matchers:
+        assert sift.ids == matchers["combined"].parts[0].ids, "SIFT and embedding references differ"
+        sift_cidx = np.array([sift.classes.index(n) for n in sift.names])
 
     @app.get("/", response_class=HTMLResponse)
     def home():
@@ -170,20 +185,23 @@ def build_app(matchers: dict, use_gemini: bool = True) -> FastAPI:
 
     @app.get("/api/info")
     def info():
+        shown = {**({"sift": sift} if sift else {}), **matchers}
         return {"classes": classes, "stats": session_stats(),
                 "methods": {k: {"n_ref": len(m.names), "threshold": round(m.threshold, 3),
-                                "calib": m.calib} for k, m in matchers.items()}}
+                                "calib": m.calib} for k, m in shown.items()}}
 
     def run_crops(path: Path, img: Image.Image):
-        """One box call, then save and embed every crop variant in parallel."""
+        """One box call, then save and embed every crop variant (and SIFT the shell crop) in parallel."""
         box = shellcrop.detect_box(crop_client, img)
-        out = {}
+        out, sift_job = {}, None
         for v in crop_variants:
             cpath = path.with_name(f"{path.stem}_{v}.jpg")
             crop = shellcrop.crop_to_box(img, box, shellcrop.VARIANTS[v]["margin"]) if box else img
             crop.save(cpath, "JPEG", quality=90)
             out[v] = (cpath, embed_pool.submit(identify.embed_image, cpath))
-        return box, out
+            if v == "crop" and sift:
+                sift_job = embed_pool.submit(sift.query_scores, cpath)
+        return box, out, sift_job
 
     @app.post("/api/identify")
     def identify_upload(image: UploadFile = File(...)):
@@ -200,7 +218,7 @@ def build_app(matchers: dict, use_gemini: bool = True) -> FastAPI:
         # embeddings per source, run concurrently: whole photo || (box -> crops)
         full_job = pool.submit(identify.embed_image, path) if "full" in needed else None
         crops_job = pool.submit(run_crops, path, img) if crop_variants else None
-        vecs, images, errors, box = {}, {"full": f"/uploads/{path.name}"}, {}, None
+        vecs, images, errors, box, sift_job = {}, {"full": f"/uploads/{path.name}"}, {}, None, None
         if full_job:
             try:
                 vecs["full"] = full_job.result()
@@ -208,7 +226,7 @@ def build_app(matchers: dict, use_gemini: bool = True) -> FastAPI:
                 errors["full"] = str(e)[:300]
         if crops_job:
             try:
-                box, crops = crops_job.result()
+                box, crops, sift_job = crops_job.result()
                 for v, (cpath, job) in crops.items():
                     images[v] = f"/uploads/{cpath.name}"
                     try:
@@ -219,6 +237,32 @@ def build_app(matchers: dict, use_gemini: bool = True) -> FastAPI:
                 errors.update({v: str(e)[:300] for v in crop_variants})
 
         results, log_rows = {}, []
+        s_sift = None
+        if sift:
+            try:
+                if sift_job is None:
+                    raise RuntimeError(errors.get("crop", "no shell crop"))
+                s_sift = sift_job.result()
+                m = sift.rank(s_sift)
+                results["sift"] = {"image": images["crop"], "box": box, "matches": m,
+                                   "likely_new": m[0]["sim"] < sift.threshold, "threshold": sift.threshold,
+                                   "scale": "spot-match score"}
+                log_rows.append({"upload_id": upload_id, "event": "identify", "method": "sift",
+                                 "filename": image.filename, "box": box or "",
+                                 "top1": m[0]["name"], "top1_sim": m[0]["sim"],
+                                 "top5": ";".join(f"{x['name']}:{x['sim']}" for x in m),
+                                 "likely_new": int(results["sift"]["likely_new"])})
+            except Exception as e:
+                results["sift"] = {"error": f"SIFT failed: {str(e)[:250]}"}
+        comb = matchers.get("combined")
+        if s_sift is not None and comb and not (sources_of(comb) - vecs.keys()):
+            results = {"best": best_guess(s_sift, comb.sims(vecs), images["crop"], box), **results}
+            b = results["best"]
+            log_rows.insert(0, {"upload_id": upload_id, "event": "identify", "method": "best",
+                                "filename": image.filename, "box": "",
+                                "top1": b["matches"][0]["name"], "top1_sim": b["matches"][0]["sim"],
+                                "top5": ";".join(f"{x['name']}:{x['sim']}" for x in b["matches"]),
+                                "likely_new": int(b["likely_new"]), "notes": f"spot {b['spot']}"})
         for method, matcher in matchers.items():
             missing = [s for s in sources_of(matcher) if s not in vecs]
             if missing:
@@ -234,8 +278,11 @@ def build_app(matchers: dict, use_gemini: bool = True) -> FastAPI:
                              "top1": m[0]["name"], "top1_sim": m[0]["sim"],
                              "top5": ";".join(f"{x['name']}:{x['sim']}" for x in m),
                              "likely_new": int(r["likely_new"])})
-        if use_gemini and "matches" in results.get("combined", {}) and "crop" in images:
-            results = {"gemini": gemini_pick(results["combined"], images["crop"], upload_id), **results}
+        shortlist = next((results[k] for k in ("best", "combined") if "matches" in results.get(k, {})), None)
+        if use_gemini and shortlist and "crop" in images:
+            g = gemini_pick(shortlist, images["crop"], upload_id)
+            results = {k: v for k, v in [("gemini", g), ("best", results.get("best")),
+                                         ("sift", results.get("sift"))] if v} | results
             g = results["gemini"]
             if "matches" in g:
                 m = g["matches"]
@@ -247,17 +294,34 @@ def build_app(matchers: dict, use_gemini: bool = True) -> FastAPI:
         log(log_rows)
         return {"upload_id": upload_id, "image": f"/uploads/{path.name}", "methods": results}
 
-    def gemini_pick(combined: dict, query_url: str, upload_id: str):
-        """Re-rank the combined top 5 with Gemini; Gemini compares shell crops."""
-        by_name = {m["name"]: m for m in combined["matches"]}
+    def best_guess(s_sift, s_emb, image_url, box, top=5, per_class=3):
+        """Fuse SIFT and combined-embedding evidence per turtle (matching.fuse)."""
+        fused = matching.fuse(s_sift, s_emb, sift_cidx, len(sift.classes))
+        matches = []
+        for k in np.argsort(-fused)[:top]:
+            mine = np.flatnonzero(sift_cidx == k)
+            mine = mine[np.lexsort((-s_emb[mine], -s_sift[mine]))][:per_class]
+            matches.append({"name": sift.classes[k], "sim": round(float(fused[k]), 2),
+                            "refs": [{"path": sift.paths[j], "sim": round(float(s_sift[j]), 1)} for j in mine]})
+        spot = round(float(s_sift[sift_cidx == sift.classes.index(matches[0]["name"])].max()), 1)
+        return {"image": image_url, "box": box, "matches": matches, "spot": spot,
+                "likely_new": spot < sift.threshold, "threshold": sift.threshold}
+
+    def gemini_pick(shortlist: dict, query_url: str, upload_id: str):
+        """Gemini chooses among a matcher's top 5 by comparing shell crops."""
+        by_name = {m["name"]: m for m in shortlist["matches"]}
         candidates = {n: [ROOT / r["path"].replace("data/crops_tight/", "data/crops/", 1) for r in m["refs"]]
                       for n, m in by_name.items()}
         try:
             out = rerank.rerank(crop_client, UPLOADS / Path(query_url).name, candidates, seed=hash(upload_id))
         except Exception as e:
             return {"error": f"Gemini re-rank failed: {str(e)[:250]}"}
-        # The "weak match" flag stays with the combined similarity: Gemini always picks someone.
-        return {**combined, "matches": [by_name[n] for n in out["ranking"]], "reason": out["reason"]}
+        # The "weak match" flag stays with the shortlist's rule: Gemini always picks someone.
+        picked = {**shortlist, "matches": [by_name[n] for n in out["ranking"]], "reason": out["reason"]}
+        if "spot" in shortlist:  # best-guess refs carry SIFT scores: re-check Gemini's pick
+            picked["spot"] = max(r["sim"] for r in picked["matches"][0]["refs"])
+            picked["likely_new"] = picked["spot"] < shortlist["threshold"]
+        return picked
 
     @app.post("/api/feedback")
     def feedback(upload_id: str = Form(...), verdict: str = Form(...),
@@ -339,7 +403,7 @@ table{border-collapse:collapse;font-size:14px;width:100%}th,td{text-align:left;p
 <div class="card" id="stats"></div>
 </main><script>
 let INFO, CUR, TRUTH;
-const LABEL = {gemini: 'Gemini pick (best)', combined: 'Combined', full: 'Whole photo', crop: 'Cropped to shell', tight: 'Tight (inside shell)'};
+const LABEL = {gemini: 'Gemini pick (best)', best: 'SIFT + embeddings', sift: 'Spot match (SIFT)', combined: 'Combined', full: 'Whole photo', crop: 'Cropped to shell', tight: 'Tight (inside shell)'};
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pct = (a, b) => b ? `${a}/${b} (${Math.round(100*a/b)}%)` : '–';
@@ -369,7 +433,12 @@ $('file').onchange = async e => {
 function column(method, r){
   if(r.error) return `<div class="card col"><h2>${LABEL[method]}</h2><p class="err">${esc(r.error)}</p></div>`;
   const m = r.matches;
-  const banner = r.likely_new
+  const spot = r.spot ?? m[0].sim;
+  const banner = (method === 'sift' || r.spot !== undefined)
+    ? (r.likely_new
+      ? `<div class="banner new">No confirming spot match (score ${spot} &lt; ${r.threshold}): could be a new turtle, or a view we don't have</div>`
+      : `<div class="banner known">Confirmed by spot match: ${esc(m[0].name)} (score ${spot})</div>`)
+    : r.likely_new
     ? `<div class="banner new">Weak match, could be a new turtle: best ${m[0].sim}, cut-off ${r.threshold}</div>`
     : `<div class="banner known">Best: ${esc(m[0].name)} (${m[0].sim})</div>`;
   const thumb = method !== 'full' ? `<a class="cropimg" href="${r.image}" target="_blank"><img src="${r.image}" title="${r.box ? 'box ' + r.box : 'no shell found — full frame'}"></a>` : '';
@@ -428,6 +497,7 @@ def main():
         ap.add_argument(f"--{v}-db", type=Path, default=identify.DATA / cfg["db"])
     ap.add_argument("--no-crop", action="store_true", help="whole-photo matcher only")
     ap.add_argument("--no-gemini", action="store_true", help="skip the Gemini re-rank column")
+    ap.add_argument("--no-sift", action="store_true", help="skip the SIFT spot-match column")
     ap.add_argument("--keep-known", type=float, default=0.8,
                     help="weak-match cut-off still recognises this share of known turtles (default 0.8)")
     args = ap.parse_args()
@@ -458,10 +528,15 @@ def main():
               f"weak-match cut-off {m.threshold:.3f} {m.calib}")
     ip = lan_ip()
     print(f"open http://localhost:{args.port}" + (f"  (phone on same Wi-Fi: http://{ip}:{args.port})" if ip else ""))
+    sift = None
+    if not args.no_sift and "crop" in pca:
+        ref = pca["crop"]
+        sift = sift_match.SiftIndex(ref.names, ref.ids, ref.paths, identify.DATA / "sift_crop250.pkl", root=ROOT)
+        print(f"sift: {len(sift.names)} reference crops; score >= {sift.threshold:g} confirms a known turtle")
     use_gemini = not args.no_gemini and "combined" in matchers
     if use_gemini:
         print(f"gemini: re-ranks the combined top 5 with {rerank.RERANK_MODEL}")
-    uvicorn.run(build_app(matchers, use_gemini), host="0.0.0.0", port=args.port, log_level="warning")
+    uvicorn.run(build_app(matchers, use_gemini, sift), host="0.0.0.0", port=args.port, log_level="warning")
 
 
 if __name__ == "__main__":

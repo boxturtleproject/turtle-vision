@@ -15,6 +15,7 @@ optimistic. oof_sims() fits on 4/5 of the (turtle, day) groups and fills in
 the held-out rows, the same way a new sighting would be scored.
 """
 import csv
+import hashlib
 import re
 from pathlib import Path
 
@@ -23,7 +24,8 @@ from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.model_selection import GroupKFold
 
-META = Path(__file__).resolve().parent / "data" / "capture_meta.csv"
+DATA = Path(__file__).resolve().parent / "data"
+META = DATA / "capture_meta.csv"
 
 
 def unit(P):
@@ -48,9 +50,45 @@ def capture_days(capture_ids):
 
 
 def turtle_day_groups(capture_ids, names):
-    """Group id per photo: same turtle + same day. Undated photos are their own group."""
+    """Group id per photo: one sighting = same turtle + same day.
+
+    box-turtle-id holds some photos twice under different dates (byte-identical
+    image files, or the same original filename on two captures). Those are
+    merged into one group so a photo can never count as its own "other day".
+    Undated photos are their own group.
+    """
     days = capture_days(capture_ids)
-    return np.array([f"{n}|{days[c]}" if days[c] else f"{n}|#{c}" for c, n in zip(capture_ids, names)])
+    meta = {}
+    if META.exists():
+        meta = {int(r["capture_id"]): r["original_filename"] for r in csv.DictReader(META.open())}
+    parent = list(range(len(capture_ids)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union_by(key_of):
+        first = {}
+        for i, (c, n) in enumerate(zip(capture_ids, names)):
+            k = key_of(c, n)
+            if k is None:
+                continue
+            if k in first:
+                parent[find(i)] = find(first[k])
+            else:
+                first[k] = i
+
+    union_by(lambda c, n: (n, days[c]) if days[c] else None)
+    union_by(lambda c, n: (n, meta[c]) if meta.get(c) else None)
+    union_by(lambda c, n: _file_hash(n, c))
+    return np.array([f"{names[find(i)]}|{capture_ids[find(i)]}" for i in range(len(capture_ids))])
+
+
+def _file_hash(name, capture_id):
+    p = DATA / name / f"{capture_id}.jpg"
+    return hashlib.sha1(p.read_bytes()).hexdigest() if p.exists() else None
 
 
 def oof_sims(X, names, groups, pca_dim=128, lda=False, folds=5):
@@ -109,3 +147,20 @@ def rank(sim, names, paths, top=5, per_class=3):
 
 def capture_id_of(path: str) -> int:
     return int(re.search(r"(\d+)\.jpg$", path).group(1))
+
+
+def fuse(sift_scores, emb_sims, cidx, n_classes, weight=1.0):
+    """Per-turtle score: log(1 + best SIFT score) + weight * best embedding similarity.
+
+    SIFT is decisive when spots match; the embedding similarity breaks ties
+    when SIFT finds little. On the different-day test this beat either alone
+    (shell-crop SIFT: 0.861 top-1 vs 0.813 SIFT alone, 0.551 embeddings;
+    whole-photo SIFT: 0.837);
+    weights 0.5-4 all landed within 0.835-0.861. Rank fusion was worse.
+    """
+    s = np.zeros(n_classes)
+    np.maximum.at(s, cidx, np.where(np.isfinite(sift_scores), sift_scores, 0))
+    e = np.full(n_classes, -np.inf)
+    np.maximum.at(e, cidx, emb_sims)
+    return np.log1p(s) + weight * np.where(np.isfinite(e), e, -1.0)
+
