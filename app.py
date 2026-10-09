@@ -1,24 +1,28 @@
 """Local web app for field-testing turtle identification.
 
 Upload a carapace photo (from a laptop or a phone on the same Wi-Fi) and see
-the closest known individuals from two matchers side by side:
+the closest known individuals from several matchers side by side:
 
-  full  — embed the whole photo (the headline classifier from identify.py)
-  crop  — crop to the shell with a Gemini bounding box (+5% margin), then embed
-  tight — same box, keep only its central 71% so the image is all shell
-          (crop/tight compare against crop_photos.py's reference crops)
+  combined — crop + tight embeddings, each projected with LDA (learned from
+             turtle names), similarities averaged. Best on the different-day
+             test (evaluate.py): ~67% top-1, ~91% top-5.
+  full     — embed the whole photo, PCA -> 128
+  crop     — crop to the shell with a Gemini bounding box (+5% margin), PCA
+  tight    — same box, keep only its central 71% (all shell), PCA
 
-Both use PCA -> 128 + 1-NN cosine. You record the true answer once (which
-turtle / new turtle / bad photo) and the app scores both matchers against it.
-Every upload and verdict is appended to results/session_log.csv.
+All rank turtles by their single most similar reference photo. You record the
+true answer once (which turtle / new turtle / bad photo) and the app scores
+every matcher against it. Every upload and verdict is appended to
+results/session_log.csv.
 
-A "likely new turtle" cut-off is calibrated per matcher at startup by
-leave-one-out over its reference set: for each reference photo, how similar
-is its nearest same-turtle photo vs. its nearest other-turtle photo.
+A "weak match" cut-off is calibrated per matcher at startup on out-of-fold,
+other-day similarities (matching.calibrate). Across days, known and new
+turtles overlap heavily, so by default the cut-off is set to still recognise
+80% of known turtles (--keep-known); treat the banner as a hint.
 
     python app.py                 # http://localhost:8000 (+ LAN URL printed)
-    python app.py --no-crop       # full-frame matcher only
-    python app.py --crop-db X --tight-db Y   # alternate crop embedding DBs
+    python app.py --no-crop       # whole-photo matcher only
+    python app.py --keep-known 0.9
 """
 import argparse, csv, html, io, socket, uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -32,9 +36,9 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
-from sklearn.decomposition import PCA
 
 import identify
+import matching
 import shellcrop
 
 register_heif_opener()  # iPhone HEIC uploads
@@ -48,52 +52,53 @@ VERDICTS = ("known", "new_turtle", "bad_photo")
 MAX_SIDE = 1280  # match the reference photos (box-turtle-id display derivatives)
 
 
-def calibrate(X, y):
-    """Pick the similarity cut-off that best separates known from new turtles.
-
-    s_known: each photo's best match among *other photos of the same turtle*
-    s_new:   each photo's best match among *other turtles* (as if it were new)
-    Maximize the mean of P(s_known >= t) and P(s_new < t).
-    """
-    S = X @ X.T
-    np.fill_diagonal(S, -np.inf)
-    same = y[:, None] == y[None, :]
-    s_known = np.where(same, S, -np.inf).max(1)
-    s_new = np.where(~same, S, -np.inf).max(1)
-    s_known = s_known[np.isfinite(s_known)]
-    cands = np.unique(np.concatenate([s_known, s_new]))
-    kept = (s_known[None, :] >= cands[:, None]).mean(1)
-    caught = (s_new[None, :] < cands[:, None]).mean(1)
-    i = int(np.argmax(kept + caught))
-    return float(cands[i]), {"known_kept": float(kept[i]), "new_caught": float(caught[i])}
-
-
 class Index:
-    def __init__(self, db: Path, pca_dim: int, ref_dir: str = ""):
-        self.names, self.paths, X = identify.load_reference(identify.DROP, db)
-        if ref_dir:  # show the matching reference crops, e.g. data/crops/<turtle>/<id>.jpg
-            self.paths = [p.replace("data/", f"data/{ref_dir}/", 1) for p in self.paths]
+    """One embedding source (full / crop / tight) projected with PCA or PCA->LDA."""
+
+    def __init__(self, source: str, db: Path, pca_dim: int, lda: bool = False, keep_known=None):
+        self.source, self.display = source, source
+        self.names, paths, X = identify.load_reference(identify.DROP, db)
+        self.ids = [matching.capture_id_of(p) for p in paths]
+        ref_dir = shellcrop.VARIANTS.get(source, {}).get("dir")
+        # show the matching reference crops, e.g. data/crops_tight/<turtle>/<id>.jpg
+        self.paths = [p.replace("data/", f"data/{ref_dir}/", 1) for p in paths] if ref_dir else paths
         self.classes = sorted(set(self.names))
-        self.pca = PCA(n_components=min(pca_dim, *X.shape), svd_solver="full",
-                       random_state=0).fit(X)
-        self.X = self._project(X)
-        self.threshold, self.calib = calibrate(self.X, np.array(self.names))
+        self.groups = matching.turtle_day_groups(self.ids, self.names)
+        self.project = matching.fit_projection(X, np.array(self.names), pca_dim, lda)
+        self.X = self.project(X)
+        self.S = matching.oof_sims(X, self.names, self.groups, pca_dim, lda)
+        self.threshold, self.calib = matching.calibrate(self.S, self.names, self.groups, keep_known)
 
-    def _project(self, X):
-        P = self.pca.transform(X)
-        return P / (np.linalg.norm(P, axis=1, keepdims=True) + 1e-12)
+    def sims(self, vecs):
+        return self.X @ self.project(vecs[self.source][None, :])[0]
 
-    def query(self, v, top=5, per_class=3):
-        sim = self.X @ self._project(v[None, :])[0]
-        hits: dict[str, list] = {}
-        for i in np.argsort(-sim):
-            n = self.names[i]
-            if n not in hits and len(hits) >= top:
-                continue
-            refs = hits.setdefault(n, [])
-            if len(refs) < per_class:
-                refs.append({"path": self.paths[i], "sim": round(float(sim[i]), 3)})
-        return [{"name": n, "sim": refs[0]["sim"], "refs": refs} for n, refs in hits.items()]
+    def query(self, vecs):
+        return matching.rank(self.sims(vecs), self.names, self.paths)
+
+
+class Combined:
+    """Average of several Index similarities over the same reference photos."""
+
+    def __init__(self, parts: list[Index], keep_known=None):
+        assert all(p.ids == parts[0].ids for p in parts), "embedding DBs cover different photos"
+        self.parts, self.display = parts, parts[-1].display
+        self.names, self.paths, self.classes = parts[0].names, parts[-1].paths, parts[0].classes
+        S = sum(p.S for p in parts) / len(parts)
+        self.threshold, self.calib = matching.calibrate(S, self.names, parts[0].groups, keep_known)
+
+    def sims(self, vecs):
+        return sum(p.sims(vecs) for p in self.parts) / len(self.parts)
+
+    def query(self, vecs):
+        return matching.rank(self.sims(vecs), self.names, self.paths)
+
+    @property
+    def sources(self):
+        return {p.source for p in self.parts}
+
+
+def sources_of(matcher):
+    return matcher.sources if isinstance(matcher, Combined) else {matcher.source}
 
 
 def log(rows: list[dict]):
@@ -138,7 +143,7 @@ def session_stats():
     return stats
 
 
-def build_app(indexes: dict[str, Index]) -> FastAPI:
+def build_app(matchers: dict) -> FastAPI:
     app = FastAPI()
     UPLOADS.mkdir(exist_ok=True)
     app.mount("/data", StaticFiles(directory=identify.DATA), name="data")
@@ -146,8 +151,9 @@ def build_app(indexes: dict[str, Index]) -> FastAPI:
     crop_client = shellcrop.make_client()
     pool = ThreadPoolExecutor(4)
     embed_pool = ThreadPoolExecutor(4)  # crop variants embed in parallel once the box is known
-    crop_variants = [v for v in shellcrop.VARIANTS if v in indexes]
-    classes = sorted(set().union(*(ix.classes for ix in indexes.values())))
+    needed = set().union(*(sources_of(m) for m in matchers.values()))
+    crop_variants = [v for v in shellcrop.VARIANTS if v in needed]
+    classes = sorted(set().union(*(m.classes for m in matchers.values())))
 
     @app.get("/", response_class=HTMLResponse)
     def home():
@@ -160,24 +166,19 @@ def build_app(indexes: dict[str, Index]) -> FastAPI:
     @app.get("/api/info")
     def info():
         return {"classes": classes, "stats": session_stats(),
-                "methods": {m: {"n_ref": len(ix.names), "threshold": round(ix.threshold, 3),
-                                "calib": ix.calib} for m, ix in indexes.items()}}
-
-    def run_full(path: Path):
-        return {"image": f"/uploads/{path.name}", "box": None,
-                "matches": indexes["full"].query(identify.embed_image(path))}
-
-    def run_variant(variant: str, path: Path, img: Image.Image, box):
-        cpath = path.with_name(f"{path.stem}_{variant}.jpg")
-        crop = shellcrop.crop_to_box(img, box, shellcrop.VARIANTS[variant]["margin"]) if box else img
-        crop.save(cpath, "JPEG", quality=90)
-        return {"image": f"/uploads/{cpath.name}", "box": box,
-                "matches": indexes[variant].query(identify.embed_image(cpath))}
+                "methods": {k: {"n_ref": len(m.names), "threshold": round(m.threshold, 3),
+                                "calib": m.calib} for k, m in matchers.items()}}
 
     def run_crops(path: Path, img: Image.Image):
-        """One box call, then embed every crop variant in parallel."""
+        """One box call, then save and embed every crop variant in parallel."""
         box = shellcrop.detect_box(crop_client, img)
-        return {v: embed_pool.submit(run_variant, v, path, img, box) for v in crop_variants}
+        out = {}
+        for v in crop_variants:
+            cpath = path.with_name(f"{path.stem}_{v}.jpg")
+            crop = shellcrop.crop_to_box(img, box, shellcrop.VARIANTS[v]["margin"]) if box else img
+            crop.save(cpath, "JPEG", quality=90)
+            out[v] = (cpath, embed_pool.submit(identify.embed_image, cpath))
+        return box, out
 
     @app.post("/api/identify")
     def identify_upload(image: UploadFile = File(...)):
@@ -191,23 +192,37 @@ def build_app(indexes: dict[str, Index]) -> FastAPI:
         path = UPLOADS / f"{upload_id}.jpg"
         img.save(path, "JPEG", quality=85)
 
-        jobs = {"full": pool.submit(run_full, path)}
-        if crop_variants:
-            crops_job = pool.submit(run_crops, path, img)
+        # embeddings per source, run concurrently: whole photo || (box -> crops)
+        full_job = pool.submit(identify.embed_image, path) if "full" in needed else None
+        crops_job = pool.submit(run_crops, path, img) if crop_variants else None
+        vecs, images, errors, box = {}, {"full": f"/uploads/{path.name}"}, {}, None
+        if full_job:
             try:
-                jobs.update(crops_job.result())
-            except Exception as e:  # box call failed: report it on every crop column
-                jobs.update({v: crops_job for v in crop_variants})
-        results, log_rows = {}, []
-        for method, job in jobs.items():
-            try:
-                r = job.result()
+                vecs["full"] = full_job.result()
             except Exception as e:
-                results[method] = {"error": str(e)[:300]}
+                errors["full"] = str(e)[:300]
+        if crops_job:
+            try:
+                box, crops = crops_job.result()
+                for v, (cpath, job) in crops.items():
+                    images[v] = f"/uploads/{cpath.name}"
+                    try:
+                        vecs[v] = job.result()
+                    except Exception as e:
+                        errors[v] = str(e)[:300]
+            except Exception as e:  # box call failed
+                errors.update({v: str(e)[:300] for v in crop_variants})
+
+        results, log_rows = {}, []
+        for method, matcher in matchers.items():
+            missing = [s for s in sources_of(matcher) if s not in vecs]
+            if missing:
+                results[method] = {"error": errors.get(missing[0], "embedding failed")}
                 continue
-            m = r["matches"]
-            r["likely_new"] = m[0]["sim"] < indexes[method].threshold
-            r["threshold"] = round(indexes[method].threshold, 3)
+            m = matcher.query(vecs)
+            r = {"image": images[matcher.display], "box": box if matcher.display != "full" else None,
+                 "matches": m, "likely_new": m[0]["sim"] < matcher.threshold,
+                 "threshold": round(matcher.threshold, 3)}
             results[method] = r
             log_rows.append({"upload_id": upload_id, "event": "identify", "method": method,
                              "filename": image.filename, "box": r["box"] or "",
@@ -297,7 +312,7 @@ table{border-collapse:collapse;font-size:14px;width:100%}th,td{text-align:left;p
 <div class="card" id="stats"></div>
 </main><script>
 let INFO, CUR, TRUTH;
-const LABEL = {full: 'Whole photo', crop: 'Cropped to shell', tight: 'Tight (inside shell)'};
+const LABEL = {combined: 'Combined (best)', full: 'Whole photo', crop: 'Cropped to shell', tight: 'Tight (inside shell)'};
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pct = (a, b) => b ? `${a}/${b} (${Math.round(100*a/b)}%)` : '–';
@@ -307,7 +322,7 @@ function showStats(s){
     <td>${pct(x.top1, x.known)}</td><td>${pct(x.top5, x.known)}</td>
     <td>${pct(x.new_flagged, x.new)}</td><td>${pct(x.known_flagged_new, x.known)}</td></tr>`).join('');
   $('stats').innerHTML = `<div class="muted" style="margin-bottom:6px">Session: ${s.uploads} uploaded, ${s.scored} scored${s.bad_photo ? `, ${s.bad_photo} bad photos` : ''}</div>
-    <table><tr><th>matcher</th><th>top-1 right</th><th>in top 5</th><th>new turtles flagged</th><th>known wrongly flagged new</th></tr>${rows}</table>`;
+    <table><tr><th>matcher</th><th>top-1 right</th><th>in top 5</th><th>new turtles flagged weak</th><th>known flagged weak</th></tr>${rows}</table>`;
 }
 async function load(){
   INFO = await (await fetch('/api/info')).json();
@@ -328,7 +343,7 @@ function column(method, r){
   if(r.error) return `<div class="card col"><h2>${LABEL[method]}</h2><p class="err">${esc(r.error)}</p></div>`;
   const m = r.matches;
   const banner = r.likely_new
-    ? `<div class="banner new">Possibly new: best ${m[0].sim} &lt; ${r.threshold}</div>`
+    ? `<div class="banner new">Weak match, could be a new turtle: best ${m[0].sim}, cut-off ${r.threshold}</div>`
     : `<div class="banner known">Best: ${esc(m[0].name)} (${m[0].sim})</div>`;
   const thumb = method !== 'full' ? `<a class="cropimg" href="${r.image}" target="_blank"><img src="${r.image}" title="${r.box ? 'box ' + r.box : 'no shell found — full frame'}"></a>` : '';
   const rows = m.map((x, i) => `<div class="match ${TRUTH === x.name ? 'truth' : ''}">
@@ -383,27 +398,38 @@ def main():
     ap.add_argument("--db", type=Path, default=identify.DB)
     for v, cfg in shellcrop.VARIANTS.items():
         ap.add_argument(f"--{v}-db", type=Path, default=identify.DATA / cfg["db"])
-    ap.add_argument("--no-crop", action="store_true", help="full-frame matcher only")
+    ap.add_argument("--no-crop", action="store_true", help="whole-photo matcher only")
+    ap.add_argument("--keep-known", type=float, default=0.8,
+                    help="weak-match cut-off still recognises this share of known turtles (default 0.8)")
     args = ap.parse_args()
 
     if not args.db.exists():
         ap.error(f"missing {args.db} — run embed_photos.py first")
     identify.load_env()
+    if not matching.META.exists():
+        print(f"no {matching.META} — run fetch_meta.py for other-day calibration; using per-photo groups")
 
-    indexes = {"full": Index(args.db, args.pca)}
+    kk = args.keep_known
+    pca = {"full": Index("full", args.db, args.pca, keep_known=kk)}
+    lda = {}
     if not args.no_crop:
-        for v, cfg in shellcrop.VARIANTS.items():
+        for v in shellcrop.VARIANTS:
             db = getattr(args, f"{v}_db")
             if db.exists():
-                indexes[v] = Index(db, args.pca, ref_dir=cfg["dir"])
+                pca[v] = Index(v, db, args.pca, keep_known=kk)
+                lda[v] = Index(v, db, args.pca, lda=True, keep_known=kk)
             else:
                 print(f"no {db} — run crop_photos.py for the {v!r} matcher")
-    for m, ix in indexes.items():
-        print(f"{m}: {len(ix.names)} reference photos, {len(ix.classes)} turtles; "
-              f"new-turtle cut-off {ix.threshold:.3f} {ix.calib}")
+    matchers = {}
+    if {"crop", "tight"} <= lda.keys():
+        matchers["combined"] = Combined([lda["crop"], lda["tight"]], keep_known=kk)
+    matchers.update(pca)
+    for k, m in matchers.items():
+        print(f"{k}: {len(m.names)} reference photos, {len(m.classes)} turtles; "
+              f"weak-match cut-off {m.threshold:.3f} {m.calib}")
     ip = lan_ip()
     print(f"open http://localhost:{args.port}" + (f"  (phone on same Wi-Fi: http://{ip}:{args.port})" if ip else ""))
-    uvicorn.run(build_app(indexes), host="0.0.0.0", port=args.port, log_level="warning")
+    uvicorn.run(build_app(matchers), host="0.0.0.0", port=args.port, log_level="warning")
 
 
 if __name__ == "__main__":
