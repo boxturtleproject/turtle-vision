@@ -38,7 +38,31 @@ copy.
 | tight crop, PCA | 0.440 | 0.740 |
 | tight crop, LDA | 0.489 | 0.796 |
 | combined: crop + tight, LDA | 0.551 | 0.839 |
-| **combined top 5, re-ranked by Gemini** (`rerank.py`) | **0.717** | 0.839 |
+| combined top 5, re-ranked by Gemini (`rerank.py`) | 0.717 | 0.839 |
+| SIFT spot match, whole photo, same view (box-turtle-id as deployed) | 0.790 | 0.841 |
+| SIFT spot match, whole photo, any view | 0.788 | 0.867 |
+| SIFT spot match on the shell crop, any view (`sift_match.py`) | 0.811 | 0.875 |
+| **SIFT + combined embeddings** (`matching.fuse`) | **0.861** | **0.916** |
+
+With whole-photo SIFT, Gemini choosing among the SIFT + embeddings top 5
+lifted top-1 from 0.837 to 0.867 (fixed 31, broke 15); choosing among SIFT's
+own top 5 gave 0.835. Not yet measured on shell-crop SIFT, where the fused
+top-1 starts at 0.861.
+
+SIFT is box-turtle-id's matcher (`backend/app/services/sift.py`), ported:
+keypoints at 250px wide, ratio test 0.67, score = good matches / fewest
+keypoints × 100. It compares against *every* reference photo, so unlike the
+re-rankers it isn't capped by the embedding shortlist, and it doesn't need
+the photo's view. Its score is also the best "new turtle" signal here: at
+box-turtle-id's cut-off of 4, the best wrong turtle reaches it for ~2% of
+queries and the right turtle for ~56% on shell crops (41% on whole photos,
+which is why the app crops first). Adding up the evidence, each turtle
+scored by log(1 + best SIFT score) + best combined-embedding similarity,
+beats either alone: SIFT is decisive when spots match and the embeddings
+break ties when it finds little (whole-photo SIFT fused: 0.837 / 0.925). Tried and not better: using SIFT only
+to re-rank the combined top 5 (0.734), SIFT at 400px (0.710 as a re-ranker),
+DISK + LightGlue keypoints with RANSAC as a re-ranker (0.736), and falling
+back to Gemini when the SIFT score is low (0.800 at best).
 
 LDA (in `matching.py`) is PCA → 128 followed by Linear Discriminant Analysis
 fit on turtle names, scored out-of-fold over (turtle, day) groups. Gemini
@@ -275,21 +299,35 @@ The different-day comparison above, for every matcher. Re-run it as photos are
 added. Shared maths (PCA / LDA projections, out-of-fold similarities,
 cut-off calibration, ranking) lives in `matching.py`.
 
+### `sift_match.py`
+box-turtle-id's SIFT spot matcher, ported (see the results above). Reference
+crop features are cached in `data/sift_crop250.pkl` (gitignored, ~70 MB).
+`python evaluate.py --sift` re-runs its different-day test.
+
 ### `app.py` — field-test web app
 Upload a photo (laptop, or a phone on the same Wi-Fi) and compare matchers
-side by side: **Gemini pick** (combined top 5 re-ranked by Gemini; shown
-first, adds ~3.5s, `--no-gemini` to skip), **combined** (crop + tight, LDA),
-**whole photo**,
-**cropped to shell** and **tight (inside shell)**. The upload is cropped on
-the fly with the same Gemini box prompt. Each column shows the top-5
-individuals with their nearest reference photos and a "weak match, could be a
-new turtle" banner. The cut-off is calibrated per matcher at startup on
-out-of-fold, other-day similarities, set to still recognise 80% of known
-turtles (`--keep-known`). Record the true answer once (which turtle / new
-turtle / bad photo) and the app scores every matcher. Uploads are
-EXIF-rotated, downscaled to 1280px and re-encoded as JPEG (HEIC supported).
-`/crops` shows every reference crop for review. Uploads go to `uploads/`,
-every upload and verdict to `results/session_log.csv` (both gitignored).
+side by side, best first:
+
+- **Gemini pick**: Gemini choosing among the SIFT + embeddings top 5; its
+  banner re-checks the SIFT score of the turtle Gemini picked. Adds ~3.5s;
+  `--no-gemini` to skip.
+- **SIFT + embeddings**: the two added up (`matching.fuse`). Its banner uses
+  the SIFT rule below.
+- **Spot match**: SIFT on the shell crop against every reference crop. A
+  score of 4+ confirms a known turtle; below that the banner says it could be
+  new, or a view we don't have. `--no-sift` to skip.
+- **Combined** (crop + tight, LDA), **whole photo**, **cropped to shell** and
+  **tight (inside shell)**: embedding matchers, each with a "weak match"
+  banner whose cut-off is calibrated at startup on out-of-fold, other-day
+  similarities to still recognise 80% of known turtles (`--keep-known`).
+
+The upload is cropped on the fly with the same Gemini box prompt. Each column
+shows the top-5 individuals with their nearest reference photos. Record the
+true answer once (which turtle / new turtle / bad photo) and the app scores
+every matcher. Uploads are EXIF-rotated, downscaled to 1280px and re-encoded
+as JPEG (HEIC supported). `/crops` shows every reference crop for review.
+Uploads go to `uploads/`, every upload and verdict to
+`results/session_log.csv` (both gitignored).
 
 ```bash
 python app.py            # prints localhost + LAN URL; --no-crop for full-frame only

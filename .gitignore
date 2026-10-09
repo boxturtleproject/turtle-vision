@@ -26,6 +26,7 @@ data/*/
 data/embeddings.sqlite
 data/embeddings_crop.sqlite
 data/embeddings_tight.sqlite
+data/sift_*.pkl
 /embedding_viz.html
 
 # Crawler is a single-use tool, kept out of the repo

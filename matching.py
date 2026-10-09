@@ -147,3 +147,20 @@ def rank(sim, names, paths, top=5, per_class=3):
 
 def capture_id_of(path: str) -> int:
     return int(re.search(r"(\d+)\.jpg$", path).group(1))
+
+
+def fuse(sift_scores, emb_sims, cidx, n_classes, weight=1.0):
+    """Per-turtle score: log(1 + best SIFT score) + weight * best embedding similarity.
+
+    SIFT is decisive when spots match; the embedding similarity breaks ties
+    when SIFT finds little. On the different-day test this beat either alone
+    (shell-crop SIFT: 0.861 top-1 vs 0.813 SIFT alone, 0.551 embeddings;
+    whole-photo SIFT: 0.837);
+    weights 0.5-4 all landed within 0.835-0.861. Rank fusion was worse.
+    """
+    s = np.zeros(n_classes)
+    np.maximum.at(s, cidx, np.where(np.isfinite(sift_scores), sift_scores, 0))
+    e = np.full(n_classes, -np.inf)
+    np.maximum.at(e, cidx, emb_sims)
+    return np.log1p(s) + weight * np.where(np.isfinite(e), e, -1.0)
+
