@@ -3,6 +3,9 @@
 Upload a carapace photo (from a laptop or a phone on the same Wi-Fi) and see
 the closest known individuals from several matchers side by side:
 
+  gemini   — the combined matcher's top 5, re-ranked by Gemini comparing the
+             shell photos (rerank.py). Best on the different-day test: ~81%
+             top-1. Adds ~3.5s per upload.
   combined — crop + tight embeddings, each projected with LDA (learned from
              turtle names), similarities averaged. Best on the different-day
              test (evaluate.py): ~67% top-1, ~91% top-5.
@@ -23,6 +26,7 @@ turtles overlap heavily, so by default the cut-off is set to still recognise
     python app.py                 # http://localhost:8000 (+ LAN URL printed)
     python app.py --no-crop       # whole-photo matcher only
     python app.py --keep-known 0.9
+    python app.py --no-gemini     # skip the Gemini re-rank column
 """
 import argparse, csv, html, io, socket, uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -39,6 +43,7 @@ from pillow_heif import register_heif_opener
 
 import identify
 import matching
+import rerank
 import shellcrop
 
 register_heif_opener()  # iPhone HEIC uploads
@@ -143,7 +148,7 @@ def session_stats():
     return stats
 
 
-def build_app(matchers: dict) -> FastAPI:
+def build_app(matchers: dict, use_gemini: bool = True) -> FastAPI:
     app = FastAPI()
     UPLOADS.mkdir(exist_ok=True)
     app.mount("/data", StaticFiles(directory=identify.DATA), name="data")
@@ -229,8 +234,30 @@ def build_app(matchers: dict) -> FastAPI:
                              "top1": m[0]["name"], "top1_sim": m[0]["sim"],
                              "top5": ";".join(f"{x['name']}:{x['sim']}" for x in m),
                              "likely_new": int(r["likely_new"])})
+        if use_gemini and "matches" in results.get("combined", {}) and "crop" in images:
+            results = {"gemini": gemini_pick(results["combined"], images["crop"], upload_id), **results}
+            g = results["gemini"]
+            if "matches" in g:
+                m = g["matches"]
+                log_rows.insert(0, {"upload_id": upload_id, "event": "identify", "method": "gemini",
+                                    "filename": image.filename, "box": g["box"] or "",
+                                    "top1": m[0]["name"], "top1_sim": m[0]["sim"],
+                                    "top5": ";".join(f"{x['name']}:{x['sim']}" for x in m),
+                                    "likely_new": int(g["likely_new"]), "notes": g["reason"]})
         log(log_rows)
         return {"upload_id": upload_id, "image": f"/uploads/{path.name}", "methods": results}
+
+    def gemini_pick(combined: dict, query_url: str, upload_id: str):
+        """Re-rank the combined top 5 with Gemini; Gemini compares shell crops."""
+        by_name = {m["name"]: m for m in combined["matches"]}
+        candidates = {n: [ROOT / r["path"].replace("data/crops_tight/", "data/crops/", 1) for r in m["refs"]]
+                      for n, m in by_name.items()}
+        try:
+            out = rerank.rerank(crop_client, UPLOADS / Path(query_url).name, candidates, seed=hash(upload_id))
+        except Exception as e:
+            return {"error": f"Gemini re-rank failed: {str(e)[:250]}"}
+        # The "weak match" flag stays with the combined similarity: Gemini always picks someone.
+        return {**combined, "matches": [by_name[n] for n in out["ranking"]], "reason": out["reason"]}
 
     @app.post("/api/feedback")
     def feedback(upload_id: str = Form(...), verdict: str = Form(...),
@@ -312,7 +339,7 @@ table{border-collapse:collapse;font-size:14px;width:100%}th,td{text-align:left;p
 <div class="card" id="stats"></div>
 </main><script>
 let INFO, CUR, TRUTH;
-const LABEL = {combined: 'Combined (best)', full: 'Whole photo', crop: 'Cropped to shell', tight: 'Tight (inside shell)'};
+const LABEL = {gemini: 'Gemini pick (best)', combined: 'Combined', full: 'Whole photo', crop: 'Cropped to shell', tight: 'Tight (inside shell)'};
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pct = (a, b) => b ? `${a}/${b} (${Math.round(100*a/b)}%)` : '–';
@@ -351,7 +378,8 @@ function column(method, r){
       <button data-name="${esc(x.name)}" onclick="send('known', this.dataset.name)">This is it</button>
       <div class="refs">${x.refs.map(rf => `<img loading="lazy" src="/${esc(rf.path)}" title="${rf.sim}">`).join('')}</div>
     </div>`).join('');
-  return `<div class="card col"><h2>${LABEL[method]}${method !== 'full' && !r.box ? ' <span class="muted">(no shell found)</span>' : ''}</h2>${thumb}${banner}${rows}</div>`;
+  const reason = r.reason ? `<p class="muted">Gemini: ${esc(r.reason)}</p>` : '';
+  return `<div class="card col"><h2>${LABEL[method]}${method !== 'full' && !r.box ? ' <span class="muted">(no shell found)</span>' : ''}</h2>${thumb}${banner}${reason}${rows}</div>`;
 }
 function render(){
   const opts = INFO.classes.map(c => `<option>${esc(c)}</option>`).join('');
@@ -399,6 +427,7 @@ def main():
     for v, cfg in shellcrop.VARIANTS.items():
         ap.add_argument(f"--{v}-db", type=Path, default=identify.DATA / cfg["db"])
     ap.add_argument("--no-crop", action="store_true", help="whole-photo matcher only")
+    ap.add_argument("--no-gemini", action="store_true", help="skip the Gemini re-rank column")
     ap.add_argument("--keep-known", type=float, default=0.8,
                     help="weak-match cut-off still recognises this share of known turtles (default 0.8)")
     args = ap.parse_args()
@@ -429,7 +458,10 @@ def main():
               f"weak-match cut-off {m.threshold:.3f} {m.calib}")
     ip = lan_ip()
     print(f"open http://localhost:{args.port}" + (f"  (phone on same Wi-Fi: http://{ip}:{args.port})" if ip else ""))
-    uvicorn.run(build_app(matchers), host="0.0.0.0", port=args.port, log_level="warning")
+    use_gemini = not args.no_gemini and "combined" in matchers
+    if use_gemini:
+        print(f"gemini: re-ranks the combined top 5 with {rerank.RERANK_MODEL}")
+    uvicorn.run(build_app(matchers, use_gemini), host="0.0.0.0", port=args.port, log_level="warning")
 
 
 if __name__ == "__main__":
