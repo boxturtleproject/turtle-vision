@@ -11,11 +11,11 @@ the closest known individuals from several matchers side by side:
              reference crop (sift_match.py). ~82% top-1 on the different-day
              test. Score >= 4 confirms a known turtle; below that the banner
              says it could be new.
-  gemini   — Gemini choosing among the best-guess top 5 by comparing the shell
-             photos (rerank.py). On the different-day test with whole-photo
-             SIFT it lifted the fused top-1 from 0.837 to 0.867 (fixed 31,
-             broke 15). Falls back to the combined top 5 without SIFT. Adds
-             ~3.5s per upload.
+  gemini   — second opinion: Gemini choosing among the best-guess top 5 by
+             comparing the shell photos (rerank.py), with a one-line reason.
+             On the different-day test it barely helps (0.852 -> 0.863 top-1;
+             fixed 24, broke 18). Falls back to the combined top 5 without
+             SIFT. Adds ~3.5s per upload; --no-gemini to skip.
   combined — crop + tight embeddings, each projected with LDA (learned from
              turtle names), similarities averaged. Best embedding matcher on
              the different-day test (evaluate.py): ~55% top-1, ~84% top-5.
@@ -281,7 +281,7 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
         shortlist = next((results[k] for k in ("best", "combined") if "matches" in results.get(k, {})), None)
         if use_gemini and shortlist and "crop" in images:
             g = gemini_pick(shortlist, images["crop"], upload_id)
-            results = {k: v for k, v in [("gemini", g), ("best", results.get("best")),
+            results = {k: v for k, v in [("best", results.get("best")), ("gemini", g),
                                          ("sift", results.get("sift"))] if v} | results
             g = results["gemini"]
             if "matches" in g:
@@ -403,7 +403,7 @@ table{border-collapse:collapse;font-size:14px;width:100%}th,td{text-align:left;p
 <div class="card" id="stats"></div>
 </main><script>
 let INFO, CUR, TRUTH;
-const LABEL = {gemini: 'Gemini pick (best)', best: 'SIFT + embeddings', sift: 'Spot match (SIFT)', combined: 'Combined', full: 'Whole photo', crop: 'Cropped to shell', tight: 'Tight (inside shell)'};
+const LABEL = {best: 'SIFT + embeddings (best)', gemini: 'Gemini pick (second opinion)', sift: 'Spot match (SIFT)', combined: 'Combined', full: 'Whole photo', crop: 'Cropped to shell', tight: 'Tight (inside shell)'};
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pct = (a, b) => b ? `${a}/${b} (${Math.round(100*a/b)}%)` : '–';
