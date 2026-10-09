@@ -154,7 +154,7 @@ def fuse(sift_scores, emb_sims, cidx, n_classes, weight=1.0):
 
     SIFT is decisive when spots match; the embedding similarity breaks ties
     when SIFT finds little. On the different-day test this beat either alone
-    (shell-crop SIFT: 0.861 top-1 vs 0.813 SIFT alone, 0.551 embeddings;
+    (shell-crop SIFT: 0.852 top-1 vs 0.815 SIFT alone, 0.551 embeddings;
     whole-photo SIFT: 0.837);
     weights 0.5-4 all landed within 0.835-0.861. Rank fusion was worse.
     """

@@ -9,9 +9,9 @@ Here it runs on the Gemini shell crop and compares against every reference
 crop, any view. Different-day test (534 queries, evaluate.py --sift):
 
                         top-1  top-5  known turtles confirmed (score >= 4)
-  shell crop            0.811  0.875  56%
+  shell crop            0.815  0.878  58%
   whole photo           0.788  0.867  41%
-  + embeddings (fuse)   0.861 / 0.837 top-1 for crop / whole photo
+  + embeddings (fuse)   0.852 / 0.837 top-1 for crop / whole photo
 
 Cropping costs the ~1.3s box call but confirms many more known turtles:
 without background, more matched spots are on the shell.

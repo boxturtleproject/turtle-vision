@@ -8,7 +8,7 @@ the closest known individuals from several matchers side by side:
              (matching.fuse). Best on the different-day test. Its banner uses
              the SIFT rule: the top turtle's spot-match score >= 4 confirms it.
   sift     — box-turtle-id's SIFT spot matcher on the shell crop against every
-             reference crop (sift_match.py). ~81% top-1 on the different-day
+             reference crop (sift_match.py). ~82% top-1 on the different-day
              test. Score >= 4 confirms a known turtle; below that the banner
              says it could be new.
   gemini   — Gemini choosing among the best-guess top 5 by comparing the shell
