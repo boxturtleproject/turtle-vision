@@ -651,7 +651,9 @@ label.drop.busy::after{content:"Working on a set: drop more to queue them";displ
 .refs{grid-column:1/-1;display:flex;gap:6px;overflow-x:auto}.refs img{height:84px;border-radius:6px}
 button{font:inherit;font-size:14px;border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 10px;cursor:pointer}
 .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}select,input[type=text]{font:inherit;padding:7px;border:1px solid var(--line);border-radius:8px}
-table{border-collapse:collapse;font-size:14px;width:100%}th,td{text-align:left;padding:4px 8px;border-bottom:1px solid var(--line)}th{color:var(--muted);font-weight:500}
+table{border-collapse:collapse;font-size:14px;width:100%}
+table.glance td{vertical-align:top}tr.go{cursor:pointer}tr.go:hover{background:var(--hit)}
+.okc{color:var(--ok);font-weight:600}.warn{color:var(--warn)}th,td{text-align:left;padding:4px 8px;border-bottom:1px solid var(--line)}th{color:var(--muted);font-weight:500}
 .done{color:var(--ok);font-weight:600}.err{color:var(--bad)}.muted{color:var(--muted);font-size:13px}
 </style></head><body><main>
 <h1>Turtle ID</h1>
@@ -763,7 +765,7 @@ addEventListener('drop', e => {
   upload([...e.dataTransfer.files]);
 });
 function column(method, r){
-  if(r.error) return `<div class="card col"><h2>${label(method)}</h2><p class="err">${esc(r.error)}</p></div>`;
+  if(r.error) return `<div class="card col" id="col-${method}"><h2>${label(method)}</h2><p class="err">${esc(r.error)}</p></div>`;
   const m = r.matches;
   const spot = r.spot ?? m[0].sim;
   const banner = (method === 'sift' || r.spot !== undefined)
@@ -780,8 +782,28 @@ function column(method, r){
       <div class="refs">${x.refs.map(rf => `<img loading="lazy" src="/${esc(rf.path)}" title="${rf.sim}">`).join('')}</div>
     </div>`).join('');
   const reason = r.reason ? `<p class="muted">Gemini: ${esc(r.reason)}</p>` : '';
-  return `<div class="card col"><h2>${label(method)}${method !== 'full' && !r.box ? ' <span class="muted">(no shell found)</span>' : ''}</h2>${thumb}${banner}${reason}${rows}</div>`;
+  return `<div class="card col" id="col-${method}"><h2>${label(method)}${method !== 'full' && !r.box ? ' <span class="muted">(no shell found)</span>' : ''}</h2>${thumb}${banner}${reason}${rows}</div>`;
 }
+const KIND = {sighting: 'SIFT + embeddings, all photos', best: 'SIFT + embeddings', gemini: 'Gemini, from the first row\'s top 5',
+  sift: 'SIFT only', combined: 'embeddings only', full: 'embeddings only', crop: 'embeddings only', tight: 'embeddings only'};
+function glance(){
+  const rows = Object.entries(CUR.methods).map(([m, r]) => {
+    if(r.error) return `<tr><td>${label(m)}</td><td colspan="3" class="err">failed</td></tr>`;
+    const top = r.matches[0], spot = r.spot ?? (m === 'sift' ? top.sim : null);
+    const state = spot != null
+      ? (r.likely_new ? `<span class="warn">spot ${spot}, not confirmed</span>` : `<span class="okc">spot ${spot}, confirmed</span>`)
+      : `<span class="muted">similarity ${top.sim}</span>`;
+    const hit = TRUTH ? (top.name === TRUTH ? ' ✓' : (r.matches.some(x => x.name === TRUTH) ? ' (top 5)' : ' ✗')) : '';
+    return `<tr class="go" data-col="col-${m}"><td>${label(m)}<div class="muted">${KIND[m] || (m.startsWith('photo') ? 'SIFT + embeddings, this photo' : '')}</div></td>
+      <td><b>${esc(top.name)}</b>${hit}</td><td>${state}</td><td class="muted">${r.matches.slice(1).map(x => esc(x.name)).join(', ')}</td></tr>`;
+  }).join('');
+  return `<div class="card"><b>At a glance</b> <span class="muted">· click a row to jump to its details</span>
+    <div style="overflow-x:auto"><table class="glance"><tr><th>method</th><th>first pick</th><th>evidence</th><th>rest of top 5</th></tr>${rows}</table></div></div>`;
+}
+document.addEventListener('click', e => {
+  const tr = e.target.closest('tr.go'); if(!tr) return;
+  document.getElementById(tr.dataset.col)?.scrollIntoView({behavior: 'smooth', block: 'start'});
+});
 function render(){
   const opts = INFO.classes.map(c => `<option>${esc(c)}</option>`).join('');
   const queryImgs = (CUR.images || [CUR.image]).map(u => `<img src="${u}">`).join('');
@@ -793,6 +815,7 @@ function render(){
         <div class="row"><button onclick="send('new_turtle')">New turtle</button><button onclick="send('bad_photo')">Bad photo</button></div>
         <div class="row"><input type="text" id="notes" placeholder="notes (optional)" style="flex:1"></div>
         <div id="saved"></div></div></div></div>
+    ${glance()}
     <div class="cols">${Object.entries(CUR.methods).map(([m, r]) => column(m, r)).join('')}</div>`;
 }
 async function send(verdict, name){
