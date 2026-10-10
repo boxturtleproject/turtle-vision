@@ -50,7 +50,7 @@ from pathlib import Path
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
@@ -66,6 +66,7 @@ register_heif_opener()  # iPhone HEIC uploads
 ROOT = Path(__file__).resolve().parent
 UPLOADS = ROOT / "uploads"
 LOG = ROOT / "results" / "session_log.csv"
+TIDY = ROOT / "results" / "uploads_summary.csv"  # one row per uploaded file, rewritten after every change
 LOG_FIELDS = ["time", "upload_id", "event", "method", "filename", "box", "top1",
               "top1_sim", "top5", "likely_new", "verdict", "true_name", "notes"]
 VERDICTS = ("known", "new_turtle", "bad_photo")
@@ -121,6 +122,74 @@ def sources_of(matcher):
     return matcher.sources if isinstance(matcher, Combined) else {matcher.source}
 
 
+TIDY_FIELDS = ["time", "filename", "upload_id", "set_id", "photos_in_set", "true_answer",
+               "set_pick", "set_result", "set_spot_score",
+               "best_pick", "best_result", "best_spot_score", "best_confirmed", "best_top5",
+               "gemini_pick", "gemini_result", "gemini_reason",
+               "sift_pick", "sift_result", "sift_score",
+               "embeddings_pick", "embeddings_result", "whole_photo_pick", "whole_photo_result", "notes"]
+
+
+def write_tidy():
+    """results/uploads_summary.csv: one row per uploaded file with every finding."""
+    if not LOG.exists():
+        return
+    rows = list(csv.DictReader(LOG.open()))
+    preds = {(r["upload_id"], r["method"]): r for r in rows if r["event"] == "identify"}
+    truth = {r["upload_id"]: r for r in rows if r["event"] == "feedback"}  # last wins
+    sets = {r["upload_id"]: r["notes"][len("photos "):].split(";") for r in rows
+            if r["event"] == "identify" and r["method"] == "sighting"}
+    set_of = {pid: sid for sid, pids in sets.items() for pid in pids}
+
+    def answer(uid):
+        fb = truth.get(uid)
+        if not fb:
+            return "", None
+        if fb["verdict"] == "known":
+            return fb["true_name"], fb["true_name"]
+        return fb["verdict"].replace("_", " "), None
+
+    def pick(uid, method, true_name):
+        p = preds.get((uid, method))
+        if not p:
+            return "", "", []
+        top5 = [x.rsplit(":", 1)[0] for x in p["top5"].split(";")]
+        result = "" if not true_name else ("right" if top5[0] == true_name else
+                                            "in top 5" if true_name in top5 else "wrong")
+        return top5[0], result, top5
+
+    out = []
+    for uid in sorted({r["upload_id"] for r in rows if r["event"] == "identify" and r["method"] != "sighting"}):
+        sid = set_of.get(uid, "")
+        ans, true_name = answer(sid or uid)
+        any_row = next(r for (u, _), r in preds.items() if u == uid)
+        best = preds.get((uid, "best"), {})
+        spot = best.get("notes", "").replace("spot ", "")
+        row = {"time": any_row["time"], "filename": any_row["filename"], "upload_id": uid, "set_id": sid,
+               "photos_in_set": len(sets.get(sid, [uid])), "true_answer": ans,
+               "best_spot_score": spot,
+               "best_confirmed": "" if not best else ("no" if best.get("likely_new") == "1" else "yes"),
+               "gemini_reason": preds.get((uid, "gemini"), {}).get("notes", ""),
+               "sift_score": preds.get((uid, "sift"), {}).get("top1_sim", ""),
+               "notes": (truth.get(sid or uid) or {}).get("notes", "")}
+        if sid:
+            row["set_pick"], row["set_result"], _ = pick(sid, "sighting", true_name)
+            row["set_spot_score"] = preds.get((sid, "sighting"), {}).get("top1_sim", "")
+        row["best_pick"], row["best_result"], top5 = pick(uid, "best", true_name)
+        row["best_top5"] = "; ".join(top5)
+        row["gemini_pick"], row["gemini_result"], _ = pick(uid, "gemini", true_name)
+        row["sift_pick"], row["sift_result"], _ = pick(uid, "sift", true_name)
+        row["embeddings_pick"], row["embeddings_result"], _ = pick(uid, "combined", true_name)
+        row["whole_photo_pick"], row["whole_photo_result"], _ = pick(uid, "full", true_name)
+        out.append(row)
+    tmp = TIDY.with_suffix(".tmp")
+    with tmp.open("w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=TIDY_FIELDS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(out)
+    tmp.replace(TIDY)
+
+
 def log(rows: list[dict]):
     LOG.parent.mkdir(exist_ok=True)
     new = not LOG.exists()
@@ -131,6 +200,10 @@ def log(rows: list[dict]):
             w.writeheader()
         for row in rows:
             w.writerow({"time": now, **row})
+    try:
+        write_tidy()
+    except Exception as e:  # never lose an upload over the summary file
+        print(f"could not update {TIDY.name}: {e}")
 
 
 def session_stats():
@@ -188,6 +261,23 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     def home():
         return PAGE
+
+    @app.get("/summary", response_class=HTMLResponse)
+    def summary_page():
+        return summary_html()
+
+    @app.get("/summary.csv")
+    def summary_csv():
+        write_tidy()
+        if not TIDY.exists():
+            raise HTTPException(404, "no uploads yet")
+        return FileResponse(TIDY, media_type="text/csv", filename="uploads_summary.csv")
+
+    @app.get("/session_log.csv")
+    def session_log_csv():
+        if not LOG.exists():
+            raise HTTPException(404, "no session log yet")
+        return FileResponse(LOG, media_type="text/csv", filename="session_log.csv")
 
     @app.get("/crops", response_class=HTMLResponse)
     def crops_page():
@@ -402,6 +492,100 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
     return app
 
 
+SUMMARY_METHODS = [("sighting", "All photos combined"), ("best", "SIFT + embeddings"),
+                   ("gemini", "Gemini pick"), ("sift", "Spot match (SIFT)"),
+                   ("combined", "Embeddings (combined)"), ("full", "Embeddings (whole photo)"),
+                   ("crop", "Embeddings (shell crop)"), ("tight", "Embeddings (tight crop)")]
+
+
+def summary_html():
+    """Session report: per-matcher scores and every upload with its guesses vs the truth."""
+    esc = lambda t: html.escape(str(t), quote=True)
+    pct = lambda a, b: f"{a}/{b} ({100 * a / b:.0f}%)" if b else "–"
+    rows = list(csv.DictReader(LOG.open())) if LOG.exists() else []
+    preds = {(r["upload_id"], r["method"]): r for r in rows if r["event"] == "identify"}
+    truth = {r["upload_id"]: r for r in rows if r["event"] == "feedback"}  # last wins
+    stats = session_stats()
+    m = stats.get("methods", {})
+
+    table = "".join(
+        f"<tr><td>{label}</td><td>{pct(x['top1'], x['known'])}</td><td>{pct(x['top5'], x['known'])}</td>"
+        f"<td>{pct(x['known'] - x['known_flagged_new'], x['known'])}</td><td>{pct(x['new_flagged'], x['new'])}</td></tr>"
+        for key, label in SUMMARY_METHODS if (x := m.get(key)))
+
+    def verdict_of(uid):
+        fb = truth.get(uid)
+        if not fb:
+            return '<span class="muted">not recorded</span>', None
+        if fb["verdict"] == "known":
+            return esc(fb["true_name"]), fb["true_name"]
+        return esc(fb["verdict"].replace("_", " ")), None
+
+    def guess(uid, method, true_name):
+        p = preds.get((uid, method))
+        if not p:
+            return "<td class='muted'>–</td>"
+        top5 = [x.rsplit(":", 1)[0] for x in p["top5"].split(";")]
+        mark = ""
+        if true_name:
+            mark = " ✓" if top5[0] == true_name else (" (top 5)" if true_name in top5 else " ✗")
+        cls = "ok" if mark == " ✓" else ("mid" if mark == " (top 5)" else ("bad" if mark else ""))
+        extra = f"<br><span class='muted'>{esc(p['notes'])}</span>" if method == "best" and p["notes"] else ""
+        return f"<td class='{cls}'>{esc(top5[0])}{mark}{extra}</td>"
+
+    cols = ["best", "gemini", "sift", "combined", "full"]
+    head = "".join(f"<th>{dict(SUMMARY_METHODS)[c]}</th>" for c in cols)
+    sight_rows = {r["upload_id"]: r for r in rows if r["event"] == "identify" and r["method"] == "sighting"}
+    in_sighting = {pid: sid for sid, r in sight_rows.items() for pid in r["notes"][len("photos "):].split(";")}
+    photo_ids = sorted({r["upload_id"] for r in rows if r["event"] == "identify" and r["method"] != "sighting"}, reverse=True)
+
+    body, seen = [], set()
+    for uid in photo_ids:
+        sid = in_sighting.get(uid)
+        if sid and sid in seen:
+            continue
+        group = [pid for pid in photo_ids if in_sighting.get(pid) == sid] if sid else [uid]
+        key = sid or uid
+        seen.add(key)
+        label, true_name = verdict_of(key)
+        thumbs = "".join(f'<img src="/uploads/{esc(pid)}.jpg" loading="lazy" alt="">' for pid in sorted(group))
+        files = ", ".join(esc(preds.get((pid, "full"), preds.get((pid, "best"), {})).get("filename", "")) for pid in sorted(group))
+        sighting_cell = guess(sid, "sighting", true_name) if sid else "<td class='muted'>single photo</td>"
+        first = True
+        for pid in sorted(group):
+            per = "".join(guess(pid, c, true_name) for c in cols)
+            if first:
+                body.append(f"<tr><td rowspan='{len(group)}' class='thumbs'>{thumbs}<div class='muted'>{files}</div></td>"
+                            f"<td rowspan='{len(group)}'>{label}</td>"
+                            f"{sighting_cell.replace('<td', f'<td rowspan={len(group)}', 1)}{per}</tr>")
+                first = False
+            else:
+                body.append(f"<tr>{per}</tr>")
+
+    n_sets = len(seen)
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Session Summary</title>
+<style>:root{{--bg:#f6f4ee;--card:#fff;--ink:#1d2a22;--muted:#6b756e;--line:#e2ded3;--ok:#2f6b4f;--mid:#b5651d;--bad:#a33}}
+@media (prefers-color-scheme: dark){{:root{{--bg:#141712;--card:#1c201a;--ink:#e6e9de;--muted:#9aa292;--line:#2f352b;--ok:#86b07a;--mid:#e3aa45;--bad:#e07e58}}}}
+body{{margin:0;padding:16px;font:15px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--ink)}}
+h1{{font-size:22px;margin:0 0 4px}}h2{{font-size:17px;margin:22px 0 8px}}.muted{{color:var(--muted);font-size:12px}}
+.card{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;overflow-x:auto}}
+table{{border-collapse:collapse;width:100%;font-size:14px}}th,td{{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}}
+th{{color:var(--muted);font-weight:500}}td.ok{{color:var(--ok);font-weight:600}}td.mid{{color:var(--mid)}}td.bad{{color:var(--bad)}}
+.thumbs img{{height:64px;border-radius:6px;margin:0 4px 4px 0}}.thumbs{{min-width:150px}}a{{color:var(--ok)}}</style></head>
+<body><h1>Session summary</h1>
+<div class="muted">{stats.get("uploads", 0)} photos in {n_sets} uploads · {stats.get("scored", 0)} photos with a recorded answer ·
+{stats.get("bad_photo", 0)} marked bad · <a href="/summary.csv">download the summary (CSV, one row per photo)</a> · <a href="/session_log.csv">raw log</a> · <a href="/">back to the app</a></div>
+<h2>How each matcher did</h2>
+<div class="card"><table><tr><th>matcher</th><th>right first time</th><th>right turtle in top 5</th>
+<th>known turtles confirmed / not flagged</th><th>new turtles flagged</th></tr>{table or '<tr><td colspan=5 class=muted>No answers recorded yet.</td></tr>'}</table>
+<p class="muted">Counts are photos, except "All photos combined", which counts multi-photo uploads. For SIFT-based matchers, "confirmed" means a spot-match score of 4 or more.</p></div>
+<h2>Every upload (newest first)</h2>
+<div class="card"><table><tr><th>photos</th><th>true answer</th><th>All photos combined</th>{head}</tr>{"".join(body) or '<tr><td colspan=8 class=muted>No uploads yet.</td></tr>'}</table>
+<p class="muted">✓ right first time · (top 5) right turtle was in the top 5 · ✗ not in the top 5. Under SIFT + embeddings: the spot-match score.</p></div>
+</body></html>"""
+
+
 def crops_review_html():
     """Grid of every reference crop, grouped by turtle; misses first."""
     boxes = identify.DATA / "crops.csv"
@@ -471,7 +655,7 @@ table{border-collapse:collapse;font-size:14px;width:100%}th,td{text-align:left;p
 .done{color:var(--ok);font-weight:600}.err{color:var(--bad)}.muted{color:var(--muted);font-size:13px}
 </style></head><body><main>
 <h1>Turtle ID</h1>
-<div class="sub"><span id="meta">loading…</span> · <a href="/crops" target="_blank">review reference crops</a></div>
+<div class="sub"><span id="meta">loading…</span> · <a href="/summary" target="_blank">session summary</a> · <a href="/crops" target="_blank">review reference crops</a></div>
 <div class="card">
   <label class="drop" id="dropbox"><input id="file" type="file" accept="image/*" multiple><b>Choose, take or drop photos of one turtle</b><br>top, left and right of the shell, filling the frame. Several photos are combined.</label>
 </div>
