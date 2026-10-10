@@ -784,7 +784,7 @@ function column(method, r){
   const reason = r.reason ? `<p class="muted">Gemini: ${esc(r.reason)}</p>` : '';
   return `<div class="card col" id="col-${method}"><h2>${label(method)}${method !== 'full' && !r.box ? ' <span class="muted">(no shell found)</span>' : ''}</h2>${thumb}${banner}${reason}${rows}</div>`;
 }
-const KIND = {sighting: 'SIFT + embeddings, all photos', best: 'SIFT + embeddings', gemini: 'Gemini, from the first row\'s top 5',
+const KIND = {sighting: 'SIFT + embeddings, all photos', best: 'SIFT + embeddings', gemini: 'Gemini, choosing from the first row top 5',
   sift: 'SIFT only', combined: 'embeddings only', full: 'embeddings only', crop: 'embeddings only', tight: 'embeddings only'};
 function glance(){
   const rows = Object.entries(CUR.methods).map(([m, r]) => {
