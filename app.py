@@ -9,11 +9,11 @@ best guess. A single photo shows these matchers side by side:
   best     — SIFT + combined embeddings: each turtle scored by
              log(1 + best SIFT score) + best embedding similarity
              (matching.fuse). Best on the different-day test. Its banner uses
-             the SIFT rule: the top turtle's spot-match score >= 4 confirms it.
-  sift     — box-turtle-id's SIFT spot matcher on the shell crop against every
-             reference crop (sift_match.py). ~82% top-1 on the different-day
-             test. Score >= 4 confirms a known turtle; below that the banner
-             says it could be new.
+             the spot-score bands: >= 2 match, 1.2-2 check (1.5-2 with
+             several photos), below that possibly new (sift_match.band_of).
+  sift     — SIFT spot matcher on the shell crop against every reference
+             crop: mutual RootSIFT matches (sift_match.py). ~88% top-1 on the
+             different-day test.
   gemini   — second opinion: Gemini choosing among the best-guess top 5 by
              comparing the shell photos (rerank.py), with a one-line reason.
              On the different-day test it barely helps (0.852 -> 0.863 top-1;
@@ -498,8 +498,8 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
                             "refs": [{"path": sift.paths[j], "sim": round(float(S[j]), 1)} for j in mine]})
         spot = round(float(S[sift_cidx == sift.classes.index(matches[0]["name"])].max()), 1)
         return {"image": photos[0]["methods"]["best"]["image"], "box": None, "matches": matches,
-                "spot": spot, "likely_new": spot < sift.threshold, "threshold": sift.threshold,
-                "n_photos": len(photos)}
+                "spot": spot, "likely_new": sift_match.band_of(spot, len(photos)) == "possibly new",
+                "threshold": sift.threshold, "n_photos": len(photos)}
 
 
 
@@ -553,10 +553,10 @@ SUMMARY_METHODS = [("sighting", "All photos combined"), ("best", "SIFT + embeddi
 
 
 def band_of(spot):
-    """Spot-score band (different-day test: top pick right 98% / ~91% / 65% / 21%)."""
+    """Spot-score band of one photo: Match / Check / Possibly new (sift_match.band_of)."""
     if spot is None:
         return ""
-    return "Confirmed" if spot >= 4 else "Likely" if spot >= 2 else "Possible" if spot >= 1 else "No match"
+    return {"match": "Match", "check": "Check", "possibly new": "Possibly new"}[sift_match.band_of(spot)]
 
 
 REVIEW_STYLE = """
@@ -570,9 +570,9 @@ table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;p
 th{color:var(--muted);font-weight:500}td.ok{color:var(--ok);font-weight:600}td.mid{color:var(--mid)}td.bad{color:var(--bad)}
 .thumbs{min-width:190px}.thumbs img{height:84px;border-radius:6px;margin:0 4px 4px 0}
 .chip{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:600}
-.b-Confirmed{background:var(--hit);color:var(--ok)}.b-Likely{background:var(--hit);color:var(--ok)}
-.b-Possible{background:#fbeee0;color:var(--mid)}.b-No{background:#f6e3df;color:var(--bad)}
-@media (prefers-color-scheme: dark){.b-Possible{background:#3a2e17}.b-No{background:#3a201a}}
+.b-Match{background:var(--hit);color:var(--ok)}
+.b-Check{background:#fbeee0;color:var(--mid)}.b-Possibly{background:#f6e3df;color:var(--bad)}
+@media (prefers-color-scheme: dark){.b-Check{background:#3a2e17}.b-Possibly{background:#3a201a}}
 .ans{min-width:230px}.ans select{font:inherit;font-size:13px;padding:4px;max-width:150px}
 .ans button{font:inherit;font-size:12px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);cursor:pointer;margin:2px 2px 0 0}
 .ans .now{font-weight:600;margin-bottom:4px}tr.answered{background:color-mix(in srgb,var(--hit) 40%,transparent)}
@@ -663,13 +663,13 @@ def summary_html(classes=(), sort="time"):
     known = [r for r in recs if r["verdict"] == "known" and r["spot"] is not None]
     new = [r for r in recs if r["verdict"] == "new_turtle" and r["spot"] is not None]
     thr_rows = ""
-    for t in (0.5, 1, 1.5, 2, 2.5, 3, 4, 5):
+    for t in (0.8, 1, 1.2, 1.5, 2, 3, 4):
         k_above = [r for r in known if r["spot"] >= t]
         thr_rows += (f"<tr><td>{t:g}</td><td>{pct(len(k_above), len(known))}</td>"
                      f"<td>{pct(sum(r['right'] for r in k_above), len(k_above))}</td>"
                      f"<td>{pct(sum(r['spot'] < t for r in new), len(new))}</td></tr>")
     band_rows = ""
-    for band in ("Confirmed", "Likely", "Possible", "No match"):
+    for band in ("Match", "Check", "Possibly new"):
         inb = [r for r in recs if band_of(r["spot"]) == band]
         kb = [r for r in inb if r["verdict"] == "known"]
         band_rows += (f"<tr><td><span class='chip b-{band.split()[0]}'>{band}</span></td><td>{len(inb)}</td>"
@@ -685,7 +685,7 @@ def summary_html(classes=(), sort="time"):
              ("new turtle", lambda r: r["verdict"] == "new_turtle", "var(--bad)"),
              ("not confirmed yet", lambda r: not r["verdict"], "var(--grey)")]
     svg = [f'<svg viewBox="0 0 {W} {H}" width="100%" role="img" aria-label="Spot scores by outcome">']
-    for v in (1, 2, 4):
+    for v in (1.2, 2):
         svg.append(f'<line x1="{xs(v)}" x2="{xs(v)}" y1="8" y2="{H - 22}" stroke="var(--line)" stroke-dasharray="3 3"/>'
                    f'<text x="{xs(v) + 3}" y="16">{v}</text>')
     for v in (0, 6, 8, 10, 12):
@@ -766,7 +766,7 @@ def summary_html(classes=(), sort="time"):
 <p class="muted">Confirmed photos only: {len(known)} known, {len(new)} new.</p></div>
 <div class="card"><b>By band</b>
 <table><tr><th>band</th><th>photos</th><th>known: top pick right</th><th>new</th><th>unconfirmed</th></tr>{band_rows}</table>
-<p class="muted">On the earlier different-day test the top pick was right 98% (Confirmed, 4+), ~91% (Likely, 2–4), 65% (Possible, 1–2) and 21% (No match, under 1) of the time.</p></div>
+<p class="muted">Bands from the October field test: Match (2+) named 127 known turtles, all right, and no new ones; Check (1.2–2) held 22 known (all right) and 5 new; Possibly new (under 1.2) caught 96.5% of new turtles. Scores logged before the RootSIFT + mutual-match change are on the old scale.</p></div>
 </div>
 
 <h2>How each method did</h2>
@@ -971,21 +971,21 @@ addEventListener('drop', e => {
   e.preventDefault(); dragDepth = 0; drop.classList.remove('over');
   upload([...e.dataTransfer.files]);
 });
-// Spot-score bands, from the different-day test (how often the top pick was right):
-// 4+ 98%, 2-4 ~91%, 1-2 65%, under 1 21%.
-function spotBanner(s, name){
-  const n = esc(name);
-  if(s >= 4) return `<div class="banner known">Confirmed by spot match: ${n} (score ${s})</div>`;
-  if(s >= 2) return `<div class="banner known">Likely match: ${n} (score ${s}; ~91% right in testing)</div>`;
-  if(s >= 1) return `<div class="banner new">Possible match: ${n} (score ${s}; ~65% right in testing). Check by eye</div>`;
-  return `<div class="banner new">No spot match found (score ${s}): could be a new turtle, or a view we don't have</div>`;
+// Spot-score bands (sift_match.band_of), from the field test: 2+ match (all right, no new
+// turtles), 1.2-2 check (1.5-2 with several photos), below that possibly new (96.5% of new turtles).
+const bandOf = (s, nPhotos) => s >= 2 ? 'match' : s >= ((nPhotos || 1) > 1 ? 1.5 : 1.2) ? 'check' : 'possibly new';
+function spotBanner(s, name, nPhotos){
+  const n = esc(name), band = bandOf(s, nPhotos);
+  if(band === 'match') return `<div class="banner known">Match: ${n} (spot score ${s})</div>`;
+  if(band === 'check') return `<div class="banner new">Check: probably ${n} (spot score ${s}). Compare with the photos below</div>`;
+  return `<div class="banner new">Possibly a new turtle (spot score ${s}), or a view we don't have</div>`;
 }
 function column(method, r){
   if(r.error) return `<div class="card col" id="col-${method}"><h2>${label(method)}</h2><p class="err">${esc(r.error)}</p></div>`;
   const m = r.matches;
   const spot = r.spot ?? m[0].sim;
   const banner = (method === 'sift' || r.spot !== undefined)
-    ? spotBanner(spot, m[0].name)
+    ? spotBanner(spot, m[0].name, r.n_photos)
     : r.likely_new
     ? `<div class="banner new">Weak match, could be a new turtle: best ${m[0].sim}, cut-off ${r.threshold}</div>`
     : `<div class="banner known">Best: ${esc(m[0].name)} (${m[0].sim})</div>`;
@@ -1005,16 +1005,16 @@ function column(method, r){
 const DESC = {
   sighting: ['Uses: SIFT + embeddings, every photo in this set',
              'Each turtle\u2019s SIFT + embeddings score is added up across all the photos you uploaded together. Spot score = the best SIFT score any of the photos got for that turtle.',
-             'Tested: 93% first time (97% with 4+ photos)'],
+             'Field test: 31 of 31 turtles with 2+ photos named right'],
   best:     ['Uses: SIFT + embeddings, shell crop',
-             'Your shell crop is compared with all 628 reference photos two ways: SIFT spot matching and image embeddings. The two scores are added per turtle. Spot score 4+ = confirmed.',
-             'Tested: 85% first time, 92% in top 5'],
+             'Your shell crop is compared with all 628 reference photos two ways: SIFT spot matching and image embeddings. The two scores are added per turtle. Spot score 2+ = match, 1.2\u20132 = check, under 1.2 = possibly new.',
+             'Tested: 89% first time, 95% in top 5 (field photos: 96%, 98%)'],
   gemini:   ['Uses: Gemini (AI vision), choosing from the SIFT + embeddings top 5',
              'Gemini sees your photo and 3 reference photos of each of those 5 turtles and picks the same shell pattern. It cannot bring in a turtle outside those 5, and it always picks someone, even for a new turtle.',
              'Tested: 86% first time'],
-  sift:     ['Uses: SIFT only (box-turtle-id\u2019s matcher), shell crop',
-             'Finds small distinctive spots on your shell crop and counts how many have a twin in each reference shell crop. Score = % of spots matched. 4+ = confirmed; under 2 is noise.',
-             'Tested: 82% first time, 88% in top 5'],
+  sift:     ['Uses: SIFT only (RootSIFT, mutual matches), shell crop',
+             'Finds small distinctive spots on your shell crop and counts the ones that pick each other as best match in a reference shell crop. Score = matched spots per 100. 2+ = match; under 1.2 = possibly new.',
+             'Tested: 88% first time, 91% in top 5'],
   combined: ['Uses: embeddings only (no SIFT), shell crop + tight crop',
              'Google image embeddings of both crops, tuned with turtle names (LDA) and averaged. Number = similarity, 0 to 1. Judges overall look, not specific spots.',
              'Tested: 55% first time, 84% in top 5'],
@@ -1035,7 +1035,7 @@ function glance(){
     if(r.error) return `<tr><td>${label(m)}</td><td colspan="3" class="err">failed</td></tr>`;
     const top = r.matches[0], spot = r.spot ?? (m === 'sift' ? top.sim : null);
     const state = spot != null
-      ? (r.likely_new ? `<span class="warn">spot ${spot}, not confirmed</span>` : `<span class="okc">spot ${spot}, confirmed</span>`)
+      ? (bandOf(spot, r.n_photos) === 'match' ? `<span class="okc">spot ${spot}, match</span>` : `<span class="warn">spot ${spot}, ${bandOf(spot, r.n_photos)}</span>`)
       : `<span class="muted">similarity ${top.sim}</span>`;
     const hit = TRUTH ? (top.name === TRUTH ? ' ✓' : (r.matches.some(x => x.name === TRUTH) ? ' (top 5)' : ' ✗')) : '';
     const [uses, , tested] = descOf(m);
@@ -1141,7 +1141,7 @@ def main():
     if not args.no_sift and "crop" in pca:
         ref = pca["crop"]
         sift = sift_match.SiftIndex(ref.names, ref.ids, ref.paths, identify.DATA / "sift_crop250.pkl", root=ROOT)
-        print(f"sift: {len(sift.names)} reference crops; score >= {sift.threshold:g} confirms a known turtle")
+        print(f"sift: {len(sift.names)} reference crops; {sift.calib['rule']}")
     use_gemini = not args.no_gemini and "combined" in matchers
     if use_gemini:
         print(f"gemini: re-ranks the combined top 5 with {rerank.RERANK_MODEL}")

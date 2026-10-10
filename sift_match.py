@@ -1,24 +1,29 @@
-"""Spot matching with box-turtle-id's SIFT matcher.
+"""Spot matching: SIFT on the shell crop, mutual matches of RootSIFT descriptors.
 
-Port of box-turtle-id backend/app/services/sift.py: SIFT keypoints on an
-image resized to 250px wide, Lowe ratio test at 0.67 in both directions,
-score = good matches / min(keypoint counts) * 100, and a match at >= 4.
-Exact brute-force matching replaces FLANN (same pairs, no index to build).
+Started as a port of box-turtle-id's matcher (backend/app/services/sift.py):
+SIFT keypoints on an image resized to 250px wide, Lowe ratio test at 0.67,
+score = good matches in the better direction / fewer keypoints * 100.
 
-Here it runs on the Gemini shell crop and compares against every reference
-crop, any view. Different-day test (534 queries, evaluate.py --sift):
+Improved after the SIFT study (analysis/SIFT_STUDY.md), same keypoints and cost:
+  - RootSIFT: descriptors L1-normalised then square-rooted (less sensitive to
+    lighting; HotSpotter uses it)
+  - mutual matches: a pair counts only when each descriptor is the other's
+    nearest neighbour, both passing the ratio test at 0.8 (looser than 0.67 is
+    safe only with the mutual check)
+  - score = mutual matches / sqrt(keypoints in both) * 100
 
-                        top-1  top-5  known turtles confirmed (score >= 4)
-  shell crop            0.815  0.878  58%
-  whole photo           0.788  0.867  41%
-  + embeddings (fuse)   0.852 / 0.837 top-1 for crop / whole photo
+Full-set results (SIFT + embeddings, matching.fuse):
+                                     old      new
+  field photos, right first time    90.3%    96.0%   (176 known turtles)
+  different-day test, right first   85.2%    88.6%   (534 queries)
+  SIFT alone, different-day test    81.5%    87.6%
 
-Cropping costs the ~1.3s box call but confirms many more known turtles:
-without background, more matched spots are on the shell.
-
-Score >= 4 is strong evidence: the best *wrong* turtle reaches it for ~2%
-of queries, the right turtle for ~58%. So "nothing scored 4+" flags most new
-turtles, at the cost of leaving many known turtles unconfirmed.
+Spot-score bands (the top turtle's score, new scale):
+  >= 2.0  match         field: 127 known all right, no new turtles
+  1.2-2   check         field: 22 known (all right) and 5 new
+  < 1.2   possibly new  catches 96.5% of new turtles
+With 2+ photos the check zone starts at 1.5: a new turtle's best photo of
+several more often reaches 1.2 by chance.
 """
 import pickle
 from concurrent.futures import ThreadPoolExecutor
@@ -28,11 +33,17 @@ import cv2
 import numpy as np
 
 WIDTH = 250
-RATIO = 0.67
-CONFIRM = 4.0  # box-turtle-id's acceptance_threshold
+RATIO = 0.8
+MATCH, CHECK, CHECK_MULTI = 2.0, 1.2, 1.5
 
 _sift = cv2.SIFT_create()
-_bf = cv2.BFMatcher(cv2.NORM_L2)
+
+
+def band_of(spot, n_photos=1):
+    """'match' / 'check' / 'possibly new' for the top turtle's spot score."""
+    if spot >= MATCH:
+        return "match"
+    return "check" if spot >= (CHECK if n_photos == 1 else CHECK_MULTI) else "possibly new"
 
 
 def features(path):
@@ -46,18 +57,40 @@ def features(path):
     return (len(kp), desc.astype(np.uint8)) if desc is not None else (0, None)
 
 
-def _good(a, b):
+def prepare(f):
+    """(keypoint count, RootSIFT float32 descriptors) from features()."""
+    n, desc = f
+    if desc is None:
+        return n, None
+    d = desc.astype(np.float32)
+    return n, np.sqrt(d / (d.sum(1, keepdims=True) + 1e-7))
+
+
+def _nearest(bf, a, b):
+    """Per row of a: (index of nearest row of b, distance ratio to the second nearest)."""
+    out = np.full((len(a), 2), [-1, 1.0])
+    for m in bf.knnMatch(a, b, k=2):
+        if len(m) == 2:
+            out[m[0].queryIdx] = m[0].trainIdx, m[0].distance / max(m[1].distance, 1e-9)
+    return out
+
+
+def mutual_score(pa, pb):
+    """Score two prepare()d features: mutual ratio-test matches / sqrt(n_a * n_b) * 100."""
+    a, b = pa[1], pb[1]
     if a is None or b is None or len(a) < 2 or len(b) < 2:
-        return 0
-    return sum(1 for m in _bf.knnMatch(a, b, k=2) if len(m) == 2 and m[0].distance < RATIO * m[1].distance)
+        return 0.0
+    bf = cv2.BFMatcher(cv2.NORM_L2)  # one per call: matchers aren't shared across threads
+    ab, ba = _nearest(bf, a, b), _nearest(bf, b, a)
+    j = ab[:, 0].astype(int)
+    back = ba[j]
+    good = (j >= 0) & (back[:, 0] == np.arange(len(a))) & (np.maximum(ab[:, 1], back[:, 1]) < RATIO)
+    return good.sum() / np.sqrt(pa[0] * pb[0]) * 100
 
 
 def score(fa, fb):
-    a = fa[1].astype(np.float32) if fa[1] is not None else None
-    b = fb[1].astype(np.float32) if fb[1] is not None else None
-    good = max(_good(a, b), _good(b, a))
-    fewest = min(fa[0], fb[0])
-    return good / fewest * 100 if fewest else 0.0
+    """Spot score between two features() results."""
+    return mutual_score(prepare(fa), prepare(fb))
 
 
 class SiftIndex:
@@ -67,8 +100,8 @@ class SiftIndex:
         """paths: reference crops relative to root (also used for display)."""
         self.names, self.ids, self.paths = list(names), list(ids), list(paths)
         self.classes = sorted(set(self.names))
-        self.threshold = CONFIRM
-        self.calib = {"rule": f"spot-match score >= {CONFIRM:g} confirms a known turtle"}
+        self.threshold = CHECK
+        self.calib = {"rule": f"spot score >= {MATCH:g} match, {CHECK:g}-{MATCH:g} check, below {CHECK:g} possibly new"}
         self.pool = ThreadPoolExecutor(workers)  # cv2 releases the GIL while matching
         cached = pickle.loads(cache.read_bytes()) if cache.exists() else {}
         missing = [i for i, c in enumerate(self.ids) if c not in cached]
@@ -77,12 +110,14 @@ class SiftIndex:
         if missing:
             cache.write_bytes(pickle.dumps(cached))
         self.feats = [cached[c] for c in self.ids]
+        self.prepped = [prepare(f) for f in self.feats]
 
     def scores(self, query_feats, exclude=None):
         """Score against every reference; exclude: optional boolean mask to skip."""
         idx = [j for j in range(len(self.ids)) if exclude is None or not exclude[j]]
         out = np.full(len(self.ids), -np.inf)
-        out[idx] = list(self.pool.map(lambda j: score(query_feats, self.feats[j]), idx))
+        q = prepare(query_feats)
+        out[idx] = list(self.pool.map(lambda j: mutual_score(q, self.prepped[j]), idx))
         return out
 
     def query_scores(self, path):
