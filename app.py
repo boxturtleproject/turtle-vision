@@ -641,7 +641,9 @@ label.drop.busy::after{content:"Working on a set: drop more to queue them";displ
 .tile{width:160px;height:120px;border-radius:8px;background:var(--hit);color:var(--muted);display:flex;align-items:center;justify-content:center;text-align:center;font-size:12px;padding:8px;overflow-wrap:anywhere}
 @media (prefers-reduced-motion: reduce){.spin,.bar span.indet{animation:none}}
 .query{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap}.qimgs{display:flex;gap:6px;flex-wrap:wrap}.qimgs img{width:160px;max-width:100%;border-radius:8px}
-.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.cols{display:flex;gap:14px;overflow-x:auto;scroll-snap-type:x mandatory;scroll-padding-left:2px;padding-bottom:10px;align-items:flex-start}
+.cols>.col{flex:0 0 min(340px,86vw);scroll-snap-align:start;margin-bottom:0}
+.colnav{display:flex;align-items:center;gap:8px;margin:0 0 8px}.colnav .muted{flex:1}
 .col h2{font-size:16px;margin:0 0 8px}.cropimg{display:block;margin-bottom:8px}.cropimg img{max-height:180px;max-width:100%;border-radius:8px}
 .banner{padding:8px 10px;border-radius:8px;font-weight:600;font-size:14px;margin:6px 0}
 .banner.new{background:#fbeee0;color:var(--warn)}.banner.known{background:var(--hit);color:var(--ok)}
@@ -802,8 +804,13 @@ function glance(){
 }
 document.addEventListener('click', e => {
   const tr = e.target.closest('tr.go'); if(!tr) return;
-  document.getElementById(tr.dataset.col)?.scrollIntoView({behavior: 'smooth', block: 'start'});
+  document.getElementById(tr.dataset.col)?.scrollIntoView({behavior: 'smooth', block: 'nearest', inline: 'start'});
 });
+function slide(dir){
+  const c = $('cols'); if(!c) return;
+  const w = (c.querySelector('.col')?.offsetWidth || 340) + 14;
+  c.scrollBy({left: dir * w, behavior: 'smooth'});
+}
 function render(){
   const opts = INFO.classes.map(c => `<option>${esc(c)}</option>`).join('');
   const queryImgs = (CUR.images || [CUR.image]).map(u => `<img src="${u}">`).join('');
@@ -816,7 +823,9 @@ function render(){
         <div class="row"><input type="text" id="notes" placeholder="notes (optional)" style="flex:1"></div>
         <div id="saved"></div></div></div></div>
     ${glance()}
-    <div class="cols">${Object.entries(CUR.methods).map(([m, r]) => column(m, r)).join('')}</div>`;
+    <div class="colnav"><span class="muted">${Object.keys(CUR.methods).length} methods side by side: scroll sideways or use the arrows</span>
+      <button onclick="slide(-1)" aria-label="Previous method">←</button><button onclick="slide(1)" aria-label="Next method">→</button></div>
+    <div class="cols" id="cols">${Object.entries(CUR.methods).map(([m, r]) => column(m, r)).join('')}</div>`;
 }
 async function send(verdict, name){
   if(verdict === 'known' && !name){ $('truename').focus(); return; }
