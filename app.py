@@ -644,6 +644,7 @@ label.drop.busy::after{content:"Working on a set: drop more to queue them";displ
 .cols{display:flex;gap:14px;overflow-x:auto;scroll-snap-type:x mandatory;scroll-padding-left:2px;padding-bottom:10px;align-items:flex-start}
 .cols>.col{flex:0 0 min(340px,86vw);scroll-snap-align:start;margin-bottom:0}
 .colnav{display:flex;align-items:center;gap:8px;margin:0 0 8px}.colnav .muted{flex:1}
+.desc{font-size:13px;color:var(--muted);background:var(--bg);border-radius:8px;padding:8px 10px;margin:0 0 10px;line-height:1.4}.desc b{color:var(--ink);font-weight:600}
 .col h2{font-size:16px;margin:0 0 8px}.cropimg{display:block;margin-bottom:8px}.cropimg img{max-height:180px;max-width:100%;border-radius:8px}
 .banner{padding:8px 10px;border-radius:8px;font-weight:600;font-size:14px;margin:6px 0}
 .banner.new{background:#fbeee0;color:var(--warn)}.banner.known{background:var(--hit);color:var(--ok)}
@@ -784,10 +785,40 @@ function column(method, r){
       <div class="refs">${x.refs.map(rf => `<img loading="lazy" src="/${esc(rf.path)}" title="${rf.sim}">`).join('')}</div>
     </div>`).join('');
   const reason = r.reason ? `<p class="muted">Gemini: ${esc(r.reason)}</p>` : '';
-  return `<div class="card col" id="col-${method}"><h2>${label(method)}${method !== 'full' && !r.box ? ' <span class="muted">(no shell found)</span>' : ''}</h2>${thumb}${banner}${reason}${rows}</div>`;
+  const [uses, how, tested] = descOf(method);
+  const desc = uses ? `<div class="desc"><b>${esc(uses)}</b><br>${esc(how)}${tested ? `<br><i>${esc(tested)}</i>` : ''}</div>` : '';
+  return `<div class="card col" id="col-${method}"><h2>${label(method)}${method !== 'full' && !r.box ? ' <span class="muted">(no shell found)</span>' : ''}</h2>${desc}${thumb}${banner}${reason}${rows}</div>`;
 }
-const KIND = {sighting: 'SIFT + embeddings, all photos', best: 'SIFT + embeddings', gemini: 'Gemini, choosing from the first row top 5',
-  sift: 'SIFT only', combined: 'embeddings only', full: 'embeddings only', crop: 'embeddings only', tight: 'embeddings only'};
+// What each method is, in plain words. Tested = the different-day test (534 photos matched only
+// against photos of the same turtle from other days): right first time / right turtle in the top 5.
+const DESC = {
+  sighting: ['Uses: SIFT + embeddings, every photo in this set',
+             'Each turtle\u2019s SIFT + embeddings score is added up across all the photos you uploaded together. Spot score = the best SIFT score any of the photos got for that turtle.',
+             'Tested: 93% first time (97% with 4+ photos)'],
+  best:     ['Uses: SIFT + embeddings, shell crop',
+             'Your shell crop is compared with all 628 reference photos two ways: SIFT spot matching and image embeddings. The two scores are added per turtle. Spot score 4+ = confirmed.',
+             'Tested: 85% first time, 92% in top 5'],
+  gemini:   ['Uses: Gemini (AI vision), choosing from the SIFT + embeddings top 5',
+             'Gemini sees your photo and 3 reference photos of each of those 5 turtles and picks the same shell pattern. It cannot bring in a turtle outside those 5, and it always picks someone, even for a new turtle.',
+             'Tested: 86% first time'],
+  sift:     ['Uses: SIFT only (box-turtle-id\u2019s matcher), shell crop',
+             'Finds small distinctive spots on your shell crop and counts how many have a twin in each reference shell crop. Score = % of spots matched. 4+ = confirmed; under 2 is noise.',
+             'Tested: 82% first time, 88% in top 5'],
+  combined: ['Uses: embeddings only (no SIFT), shell crop + tight crop',
+             'Google image embeddings of both crops, tuned with turtle names (LDA) and averaged. Number = similarity, 0 to 1. Judges overall look, not specific spots.',
+             'Tested: 55% first time, 84% in top 5'],
+  full:     ['Uses: embeddings only (no SIFT), whole photo',
+             'Google image embedding of the uncropped photo, background and hands included. Number = similarity, 0 to 1.',
+             'Tested: 39% first time, 68% in top 5'],
+  crop:     ['Uses: embeddings only (no SIFT), shell crop',
+             'Google image embedding of the shell crop (Gemini\u2019s box + 5% margin). Number = similarity, 0 to 1.',
+             'Tested: 40% first time, 68% in top 5'],
+  tight:    ['Uses: embeddings only (no SIFT), tight crop',
+             'Google image embedding of the centre 71% of the shell box: all shell, edge plates cut off. Number = similarity, 0 to 1.',
+             'Tested: 44% first time, 74% in top 5'],
+};
+const descOf = m => DESC[m] || (m.startsWith('photo')
+  ? ['Uses: SIFT + embeddings, this photo alone', 'The same method as the SIFT + embeddings column, run on just this one photo.', ''] : ['', '', '']);
 function glance(){
   const rows = Object.entries(CUR.methods).map(([m, r]) => {
     if(r.error) return `<tr><td>${label(m)}</td><td colspan="3" class="err">failed</td></tr>`;
@@ -796,7 +827,8 @@ function glance(){
       ? (r.likely_new ? `<span class="warn">spot ${spot}, not confirmed</span>` : `<span class="okc">spot ${spot}, confirmed</span>`)
       : `<span class="muted">similarity ${top.sim}</span>`;
     const hit = TRUTH ? (top.name === TRUTH ? ' ✓' : (r.matches.some(x => x.name === TRUTH) ? ' (top 5)' : ' ✗')) : '';
-    return `<tr class="go" data-col="col-${m}"><td>${label(m)}<div class="muted">${KIND[m] || (m.startsWith('photo') ? 'SIFT + embeddings, this photo' : '')}</div></td>
+    const [uses, , tested] = descOf(m);
+    return `<tr class="go" data-col="col-${m}"><td>${label(m)}<div class="muted">${esc(uses)}${tested ? '<br>' + esc(tested) : ''}</div></td>
       <td><b>${esc(top.name)}</b>${hit}</td><td>${state}</td><td class="muted">${r.matches.slice(1).map(x => esc(x.name)).join(', ')}</td></tr>`;
   }).join('');
   return `<div class="card"><b>At a glance</b> <span class="muted">· click a row to jump to its details</span>
