@@ -1,0 +1,60 @@
+version                               ref_t1  ref_t5  ref_f1  ref_f5 ref_auc  fld_t1  fld_t5  fld_f1  fld_f5 fld_auc named90 wrong90       w
+today: grey, ratio 0.67                0.816   0.876   0.852   0.933   0.892   0.795   0.926   0.881   0.960   0.889   0.761   0.017   0.500
+grey + mutual 0.8                      0.841   0.897   0.869   0.934   0.899   0.886   0.949   0.932   0.972   0.917   0.801   0.011   1.000
+grey + mutual 0.8 (sqrt norm)          0.850   0.908   0.873   0.929   0.901   0.886   0.938   0.920   0.966   0.937   0.841   0.011   2.000
+RootSIFT + mutual 0.8                  0.867   0.912   0.882   0.942   0.921   0.932   0.966   0.949   0.977   0.929   0.847   0.000   1.000
+RootSIFT + mutual 0.8 (sqrt)           0.876   0.914   0.890   0.946   0.917   0.909   0.955   0.966   0.989   0.944   0.869   0.006   2.000
+Root+yellow + mutual 0.8               0.884   0.934   0.895   0.946   0.933   0.881   0.943   0.898   0.966   0.952   0.841   0.045   0.500
+Root+yellow + mutual 0.8 (sqrt)        0.906   0.942   0.910   0.944   0.946   0.903   0.938   0.909   0.960   0.979   0.881   0.057   2.000
+Root+yellow LNBNN                      0.938   0.968   0.944   0.976   0.934   0.909   0.926   0.920   0.966   0.904   0.869   0.000   4.000
+Root+yellow mutual+position            0.916   0.936   0.918   0.961   0.939   0.903   0.909   0.909   0.955   0.924   0.898   0.006   1.000
+Root grey+yellow summed (mutn)         0.908   0.940   0.910   0.957   0.933   0.892   0.943   0.920   0.966   0.960   0.858   0.045   1.000
+Root grey+yellow summed (mutg)         0.927   0.946   0.929   0.949   0.948   0.926   0.955   0.926   0.960   0.987   0.920   0.051   4.000
+
+Embeddings: photos rescued (SIFT wrong -> combined right) / broken (SIFT right -> combined wrong)
+  today: grey, ratio 0.67              fld: rescued  22  broken   7  of 176
+  today: grey, ratio 0.67              ref: rescued  31  broken  12  of 534
+  grey + mutual 0.8                    fld: rescued   8  broken   0  of 176
+  grey + mutual 0.8                    ref: rescued  21  broken   6  of 534
+  grey + mutual 0.8 (sqrt norm)        fld: rescued   6  broken   0  of 176
+  grey + mutual 0.8 (sqrt norm)        ref: rescued  15  broken   3  of 534
+  RootSIFT + mutual 0.8                fld: rescued   5  broken   2  of 176
+  RootSIFT + mutual 0.8                ref: rescued  12  broken   4  of 534
+  RootSIFT + mutual 0.8 (sqrt)         fld: rescued  10  broken   0  of 176
+  RootSIFT + mutual 0.8 (sqrt)         ref: rescued   9  broken   2  of 534
+  Root+yellow + mutual 0.8             fld: rescued   4  broken   1  of 176
+  Root+yellow + mutual 0.8             ref: rescued  12  broken   6  of 534
+  Root+yellow + mutual 0.8 (sqrt)      fld: rescued   1  broken   0  of 176
+  Root+yellow + mutual 0.8 (sqrt)      ref: rescued   4  broken   2  of 534
+  Root+yellow LNBNN                    fld: rescued   2  broken   0  of 176
+  Root+yellow LNBNN                    ref: rescued   5  broken   2  of 534
+  Root+yellow mutual+position          fld: rescued   1  broken   0  of 176
+  Root+yellow mutual+position          ref: rescued   5  broken   4  of 534
+  Root grey+yellow summed (mutn)       fld: rescued   5  broken   0  of 176
+  Root grey+yellow summed (mutn)       ref: rescued   4  broken   3  of 534
+  Root grey+yellow summed (mutg)       fld: rescued   0  broken   0  of 176
+  Root grey+yellow summed (mutg)       ref: rescued   2  broken   1  of 534
+
+Vs today (SIFT + embeddings, right first time): photos fixed / broken
+  today: grey, ratio 0.67              fld: fixed   0  broken   0
+  today: grey, ratio 0.67              ref: fixed   0  broken   0
+  grey + mutual 0.8                    fld: fixed  12  broken   3
+  grey + mutual 0.8                    ref: fixed  15  broken   6
+  grey + mutual 0.8 (sqrt norm)        fld: fixed  11  broken   4
+  grey + mutual 0.8 (sqrt norm)        ref: fixed  23  broken  12
+  RootSIFT + mutual 0.8                fld: fixed  13  broken   1
+  RootSIFT + mutual 0.8                ref: fixed  24  broken   8
+  RootSIFT + mutual 0.8 (sqrt)         fld: fixed  15  broken   0
+  RootSIFT + mutual 0.8 (sqrt)         ref: fixed  28  broken   8
+  Root+yellow + mutual 0.8             fld: fixed  11  broken   8
+  Root+yellow + mutual 0.8             ref: fixed  29  broken   6
+  Root+yellow + mutual 0.8 (sqrt)      fld: fixed  13  broken   8
+  Root+yellow + mutual 0.8 (sqrt)      ref: fixed  39  broken   8
+  Root+yellow LNBNN                    fld: fixed  13  broken   6
+  Root+yellow LNBNN                    ref: fixed  53  broken   4
+  Root+yellow mutual+position          fld: fixed  13  broken   8
+  Root+yellow mutual+position          ref: fixed  44  broken   9
+  Root grey+yellow summed (mutn)       fld: fixed  12  broken   5
+  Root grey+yellow summed (mutn)       ref: fixed  36  broken   5
+  Root grey+yellow summed (mutg)       fld: fixed  13  broken   5
+  Root grey+yellow summed (mutg)       ref: fixed  46  broken   5

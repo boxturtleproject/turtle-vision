@@ -15,6 +15,13 @@ known turtle first 90% of the time (97% in the top 5)**, and **100% of
 encounters with 2+ photos**. A spot score under ~1.5 catches 92% of new
 turtles. Full write-up: [`analysis/FIELD_TEST.md`](analysis/FIELD_TEST.md).
 
+**SIFT study (same photos):** counting only *mutual* matches of *RootSIFT*
+descriptors lifts SIFT + embeddings to **96% right first time** (98% top 5)
+on those field photos and 0.886 on the different-day test, with much cleaner
+new-turtle separation. `sift_match.py` now uses it; spot-score bands are
+Match ≥ 2, Check 1.2–2, Possibly new below. Write-up:
+[`analysis/SIFT_STUDY.md`](analysis/SIFT_STUDY.md).
+
 ## Headline result
 
 | metric | value |
@@ -48,8 +55,10 @@ copy.
 | combined top 5, re-ranked by Gemini (`rerank.py`) | 0.717 | 0.839 |
 | SIFT spot match, whole photo, same view (box-turtle-id as deployed) | 0.790 | 0.841 |
 | SIFT spot match, whole photo, any view | 0.788 | 0.867 |
-| SIFT spot match on the shell crop, any view (`sift_match.py`) | 0.815 | 0.878 |
-| **SIFT + combined embeddings** (`matching.fuse`) | **0.852** | **0.925** |
+| SIFT spot match on the shell crop, any view (box-turtle-id's scoring) | 0.815 | 0.878 |
+| SIFT + combined embeddings, box-turtle-id's scoring | 0.852 | 0.925 |
+| SIFT on the shell crop, RootSIFT + mutual matches (`sift_match.py`) | 0.876 | 0.914 |
+| **SIFT (RootSIFT + mutual) + combined embeddings** (`matching.fuse`) | **0.886** | **0.946** |
 
 Gemini choosing among the SIFT + embeddings top 5 adds little: 0.852 → 0.863
 top-1 (fixed 24, broke 18), within noise for ~3.5s and an API call per photo.
@@ -57,9 +66,11 @@ With whole-photo SIFT, where the fused top-1 starts lower, it helped more
 (0.837 → 0.867); choosing among SIFT's own top 5 gave 0.835. The app shows it
 as a second opinion next to SIFT + embeddings.
 
-SIFT is box-turtle-id's matcher (`backend/app/services/sift.py`), ported:
-keypoints at 250px wide, ratio test 0.67, score = good matches / fewest
-keypoints × 100. It compares against *every* reference photo, so unlike the
+SIFT started as box-turtle-id's matcher (`backend/app/services/sift.py`),
+ported: keypoints at 250px wide, ratio test 0.67, score = good matches /
+fewest keypoints × 100. The numbers in this paragraph are for that original
+scoring; `sift_match.py` now counts mutual RootSIFT matches at ratio 0.8
+(see [`analysis/SIFT_STUDY.md`](analysis/SIFT_STUDY.md)). It compares against *every* reference photo, so unlike the
 re-rankers it isn't capped by the embedding shortlist, and it doesn't need
 the photo's view. Its score is also the best "new turtle" signal here: at
 box-turtle-id's cut-off of 4, the best wrong turtle reaches it for ~2% of
@@ -308,8 +319,11 @@ added. Shared maths (PCA / LDA projections, out-of-fold similarities,
 cut-off calibration, ranking) lives in `matching.py`.
 
 ### `sift_match.py`
-box-turtle-id's SIFT spot matcher, ported (see the results above). Reference
-crop features are cached in `data/sift_crop250.pkl` (gitignored, ~70 MB).
+SIFT spot matcher on shell crops: box-turtle-id's keypoints, scored by mutual
+RootSIFT matches (see the results above and `analysis/SIFT_STUDY.md`). Spot
+bands: ≥ 2 match, 1.2–2 check (1.5–2 with several photos), below that
+possibly new (`band_of`). Reference crop features are cached in
+`data/sift_crop250.pkl` (gitignored, ~70 MB).
 `python evaluate.py --sift` re-runs its different-day test.
 
 ### `app.py` — field-test web app
@@ -322,13 +336,13 @@ The result shows **All photos combined** first, then each photo's own best
 guess. For a single photo, matchers are side by side, best first:
 
 - **SIFT + embeddings** (best): the two added up (`matching.fuse`). Its
-  banner uses the SIFT rule below.
+  banner uses the spot-score bands below.
 - **Gemini pick** (second opinion): Gemini choosing among the SIFT +
   embeddings top 5, with a one-line reason; its banner re-checks the SIFT
   score of the turtle Gemini picked. Adds ~3.5s; `--no-gemini` to skip.
-- **Spot match**: SIFT on the shell crop against every reference crop. A
-  score of 4+ confirms a known turtle; below that the banner says it could be
-  new, or a view we don't have. `--no-sift` to skip.
+- **Spot match**: SIFT on the shell crop against every reference crop. Spot
+  score 2+ = **Match**, 1.2–2 = **Check** (1.5–2 with several photos), below
+  that **Possibly new** (or a view we don't have). `--no-sift` to skip.
 - **Embeddings only (crop + tight)** (LDA; no SIFT), **whole photo**, **cropped to shell** and
   **tight (inside shell)**: embedding matchers, each with a "weak match"
   banner whose cut-off is calibrated at startup on out-of-fold, other-day

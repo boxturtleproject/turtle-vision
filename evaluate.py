@@ -11,7 +11,7 @@ data/capture_meta.csv (fetch_meta.py).
     python evaluate.py
     python evaluate.py --gemini 120   # also Gemini re-ranking on 120 random
                                       # queries (~$0.005 and ~9k tokens each)
-    python evaluate.py --sift         # also box-turtle-id's SIFT spot matcher
+    python evaluate.py --sift         # also the SIFT spot matcher (sift_match.py)
                                       # against every reference crop (~5-25 min)
 """
 import argparse
@@ -107,12 +107,12 @@ def sift_eval(names, ids, groups, S_emb=None):
             ftop = [classes[k] for k in np.argsort(-fused)[:5]]
             f1 += ftop[0] == names[q]
             f5 += names[q] in ftop
-        confirmed_right += best.get(names[q], 0) >= sift_match.CONFIRM
-        confirmed_wrong += max(v for n, v in best.items() if n != names[q]) >= sift_match.CONFIRM
+        confirmed_right += best.get(names[q], 0) >= sift_match.MATCH
+        confirmed_wrong += max(v for n, v in best.items() if n != names[q]) >= sift_match.MATCH
     n = len(queries)
-    print(f"\nSIFT spot match (box-turtle-id's matcher) on shell crops, any view, {n} queries:")
+    print(f"\nSIFT spot match (RootSIFT, mutual matches) on shell crops, any view, {n} queries:")
     print(f"  top-1 {t1 / n:.3f}  top-5 {t5 / n:.3f}")
-    print(f"  score >= {sift_match.CONFIRM:g}: right turtle reaches it {confirmed_right / n:.0%}, "
+    print(f"  score >= {sift_match.MATCH:g}: right turtle reaches it {confirmed_right / n:.0%}, "
           f"best wrong turtle {confirmed_wrong / n:.0%}")
     if S_emb is not None:
         print(f"SIFT + combined embeddings (matching.fuse): top-1 {f1 / n:.3f}  top-5 {f5 / n:.3f}")

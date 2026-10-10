@@ -6,6 +6,11 @@ review page (`/summary`): **176 known turtles, 142 new turtles, 46 bad
 photos**. None of these photos are in the reference set (checked by visual
 fingerprint against all 1,000 reference photos).
 
+> **Follow-up:** the numbers below use box-turtle-id's original SIFT scoring.
+> Counting mutual RootSIFT matches instead raises SIFT + embeddings to 96.0%
+> right first time on these photos, with new spot-score bands (Match ≥ 2,
+> Check 1.2–2, Possibly new below). See [`SIFT_STUDY.md`](SIFT_STUDY.md).
+
 Data: [`field_2026-10/`](field_2026-10/) (no images). `uploads_summary.csv`
 has one row per photo with the verified answer, each method's pick and
 result, and the spot score. Reproduce every number below with:
