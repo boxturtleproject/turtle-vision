@@ -8,6 +8,13 @@ classifier to identify individual turtles from their carapace pattern.
 committed. Download it from the live box-turtle-id app with
 `python fetch_data.py` (see [Prerequisites](#prerequisites)).
 
+## Field test (October 2026)
+
+364 new field photos, each verified by hand: **SIFT + embeddings named the
+known turtle first 90% of the time (97% in the top 5)**, and **100% of
+encounters with 2+ photos**. A spot score under ~1.5 catches 92% of new
+turtles. Full write-up: [`analysis/FIELD_TEST.md`](analysis/FIELD_TEST.md).
+
 ## Headline result
 
 | metric | value |
