@@ -446,6 +446,16 @@ h1{font-size:22px;margin:4px 0 2px}.sub{color:var(--muted);font-size:13px;margin
 label.drop{display:block;border:2px dashed var(--line);border-radius:12px;padding:22px;text-align:center;cursor:pointer;color:var(--muted)}
 label.drop b{color:var(--accent)}input[type=file]{display:none}
 label.drop.over{border-color:var(--accent);background:var(--hit);color:var(--ink)}
+label.drop.busy::after{content:"Working on a set: drop more to queue them";display:block;margin-top:6px;font-size:13px;color:var(--accent)}
+.working .status{display:flex;align-items:center;gap:10px;margin:10px 0 8px;font-weight:600}
+.spin{width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.bar{height:6px;background:var(--line);border-radius:99px;overflow:hidden;margin-bottom:8px}
+.bar span{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+.bar span.indet{width:100%!important;opacity:.55;animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.25}}
+.tile{width:160px;height:120px;border-radius:8px;background:var(--hit);color:var(--muted);display:flex;align-items:center;justify-content:center;text-align:center;font-size:12px;padding:8px;overflow-wrap:anywhere}
+@media (prefers-reduced-motion: reduce){.spin,.bar span.indet{animation:none}}
 .query{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap}.qimgs{display:flex;gap:6px;flex-wrap:wrap}.qimgs img{width:160px;max-width:100%;border-radius:8px}
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
 .col h2{font-size:16px;margin:0 0 8px}.cropimg{display:block;margin-bottom:8px}.cropimg img{max-height:180px;max-width:100%;border-radius:8px}
@@ -463,7 +473,7 @@ table{border-collapse:collapse;font-size:14px;width:100%}th,td{text-align:left;p
 <h1>Turtle ID</h1>
 <div class="sub"><span id="meta">loading…</span> · <a href="/crops" target="_blank">review reference crops</a></div>
 <div class="card">
-  <label class="drop"><input id="file" type="file" accept="image/*" multiple><b>Choose, take or drop photos of one turtle</b><br>top, left and right of the shell, filling the frame. Several photos are combined.</label>
+  <label class="drop" id="dropbox"><input id="file" type="file" accept="image/*" multiple><b>Choose, take or drop photos of one turtle</b><br>top, left and right of the shell, filling the frame. Several photos are combined.</label>
 </div>
 <div id="result"></div>
 <div class="card" id="stats"></div>
@@ -489,17 +499,72 @@ async function load(){
   showStats(INFO.stats);
 }
 let BUSY = false;
-async function upload(files){
-  files = files.filter(f => f.type.startsWith('image/') || /[.](heic|heif)$/i.test(f.name));
-  if(!files.length || BUSY) return;
-  BUSY = true;
-  $('result').innerHTML = `<div class="card">Cropping, embedding and matching ${files.length > 1 ? files.length + ' photos' : ''}…</div>`;
-  try {
+const QUEUE = [];
+const isImage = f => f.type.startsWith('image/') || /[.](heic|heif)$/i.test(f.name);
+const canPreview = f => /^image[/](jpeg|png|gif|webp)$/.test(f.type);
+function upload(files){
+  files = files.filter(isImage);
+  if(!files.length) return;
+  QUEUE.push(files);
+  if(BUSY) showQueue(); else next();
+}
+function showQueue(){
+  const el = $('queued');
+  if(el) el.textContent = QUEUE.length ? `${QUEUE.length} more ${QUEUE.length > 1 ? 'sets' : 'set'} waiting` : '';
+}
+function post(files, onProgress){
+  return new Promise((resolve, reject) => {
     const fd = new FormData(); files.forEach(f => fd.append('images', f));
-    const r = await fetch('/api/identify', {method:'POST', body:fd});
-    if(!r.ok){ $('result').innerHTML = `<div class="card err">${esc((await r.json().catch(() => ({}))).detail || 'Upload failed. Try again.')}</div>`; return; }
-    CUR = await r.json(); TRUTH = null; render();
-  } finally { BUSY = false; }
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/identify');
+    xhr.upload.onprogress = e => e.lengthComputable && onProgress(e.loaded / e.total);
+    xhr.upload.onload = () => onProgress(1);
+    xhr.onload = () => {
+      let body = {}; try { body = JSON.parse(xhr.responseText); } catch(_) {}
+      xhr.status < 300 ? resolve(body) : reject(new Error(body.detail || `Upload failed (${xhr.status}). Try again.`));
+    };
+    xhr.onerror = () => reject(new Error('Could not reach the app. Is it still running?'));
+    xhr.send(fd);
+  });
+}
+async function next(){
+  const files = QUEUE.shift();
+  if(!files){ BUSY = false; $('dropbox').classList.remove('busy'); return; }
+  BUSY = true; $('dropbox').classList.add('busy');
+  const urls = files.map(f => canPreview(f) ? URL.createObjectURL(f) : null);
+  const tiles = files.map((f, i) => urls[i] ? `<img src="${urls[i]}" alt="">`
+    : `<div class="tile">${esc(f.name)}</div>`).join('');
+  const n = files.length, start = Date.now();
+  $('result').innerHTML = `<div class="card working"><div class="qimgs">${tiles}</div>
+    <div class="status"><span class="spin" aria-hidden="true"></span><span id="stage">Uploading ${n > 1 ? n + ' photos' : 'photo'}…</span></div>
+    <div class="bar"><span id="barfill"></span></div>
+    <div class="muted" id="hint">Usually 5–10 seconds per set${n > 1 ? '; photos are matched in parallel' : ''}.</div>
+    <div class="muted" id="queued"></div></div>`;
+  showQueue();
+  let stage = 'upload';
+  const tick = setInterval(() => {
+    if(stage === 'match') $('stage').textContent = `Cropping and matching ${n > 1 ? n + ' photos' : ''}… ${Math.round((Date.now() - start) / 1000)} s`;
+  }, 500);
+  let shown = false;
+  try {
+    CUR = await post(files, frac => {
+      $('barfill').style.width = `${Math.round(frac * 100)}%`;
+      if(frac >= 1 && stage === 'upload'){ stage = 'match'; $('barfill').classList.add('indet'); }
+    });
+    TRUTH = null; render(); shown = true;
+    if(QUEUE.length) $('saved').insertAdjacentHTML('beforebegin', `<p class="muted">${QUEUE.length} more ${QUEUE.length > 1 ? 'sets' : 'set'} waiting. Record this one, then the next will show.</p>`);
+  } catch(err){
+    $('result').innerHTML = `<div class="card err">${esc(err.message)}</div>`;
+  } finally {
+    clearInterval(tick); urls.forEach(u => u && URL.revokeObjectURL(u));
+    if(QUEUE.length && shown) await waitForVerdictOrTimeout();
+    next();
+  }
+}
+// With a queue, keep each result on screen until it's recorded (or 60 s pass).
+let verdictResolve = null;
+function waitForVerdictOrTimeout(){
+  return new Promise(res => { verdictResolve = res; setTimeout(() => { verdictResolve = null; res(); }, 60000); });
 }
 $('file').onchange = e => { const files = [...e.target.files]; e.target.value = ''; upload(files); };
 // Drag and drop anywhere on the page; several photos dropped together = one turtle.
@@ -557,6 +622,7 @@ async function send(verdict, name){
   render(); $('notes').value = notes;
   $('saved').innerHTML = `<p class="done">Saved: ${verdict === 'known' ? esc(name) : verdict.replace('_', ' ')}</p>`;
   showStats(r.stats);
+  if(verdictResolve){ const go = verdictResolve; verdictResolve = null; setTimeout(go, 1200); }
 }
 load();
 </script></body></html>
