@@ -494,7 +494,7 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
 
 SUMMARY_METHODS = [("sighting", "All photos combined"), ("best", "SIFT + embeddings"),
                    ("gemini", "Gemini pick"), ("sift", "Spot match (SIFT)"),
-                   ("combined", "Embeddings (combined)"), ("full", "Embeddings (whole photo)"),
+                   ("combined", "Embeddings only (crop + tight)"), ("full", "Embeddings (whole photo)"),
                    ("crop", "Embeddings (shell crop)"), ("tight", "Embeddings (tight crop)")]
 
 
@@ -663,7 +663,7 @@ table{border-collapse:collapse;font-size:14px;width:100%}th,td{text-align:left;p
 <div class="card" id="stats"></div>
 </main><script>
 let INFO, CUR, TRUTH;
-const LABEL = {sighting: 'All photos combined (best)', best: 'SIFT + embeddings (best)', gemini: 'Gemini pick (second opinion)', sift: 'Spot match (SIFT)', combined: 'Combined', full: 'Whole photo', crop: 'Cropped to shell', tight: 'Tight (inside shell)'};
+const LABEL = {sighting: 'All photos combined (best)', best: 'SIFT + embeddings (best)', gemini: 'Gemini pick (second opinion)', sift: 'Spot match (SIFT)', combined: 'Embeddings only (crop + tight)', full: 'Whole photo', crop: 'Cropped to shell', tight: 'Tight (inside shell)'};
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const label = m => LABEL[m] || (m.startsWith('photo') ? `Photo ${m.slice(5)} alone` : m);
