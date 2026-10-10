@@ -39,3 +39,6 @@ download_photos.py
 # Field-test app: uploaded photos + session log (contain new, unpublished photos)
 uploads/
 results/
+
+# Generated analysis pages (reference local photos by file:// path)
+analysis/out/
