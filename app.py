@@ -191,6 +191,29 @@ def write_tidy():
 
 
 SKIPPED = ROOT / "results" / "skipped.csv"
+META = ROOT / "results" / "photo_meta.csv"  # when each uploaded photo was taken (from EXIF)
+_meta_lock = __import__("threading").Lock()
+
+
+def taken_at(img: Image.Image) -> str:
+    """'YYYY-MM-DD HH:MM:SS' from EXIF DateTimeOriginal (or DateTime), '' if absent."""
+    try:
+        exif = img.getexif()
+        raw = exif.get_ifd(0x8769).get(36867) or exif.get(306) or ""
+        return raw.replace(":", "-", 2).strip() if raw else ""
+    except Exception:
+        return ""
+
+
+def note_meta(upload_id, filename, taken):
+    with _meta_lock:
+        new = not META.exists()
+        META.parent.mkdir(exist_ok=True)
+        with META.open("a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["upload_id", "filename", "taken"])
+            if new:
+                w.writeheader()
+            w.writerow({"upload_id": upload_id, "filename": filename, "taken": taken})
 
 
 def log_skipped(photos):
@@ -324,9 +347,12 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
         """Run every matcher on one photo. Returns its results, log rows, and the
         per-reference evidence (fused + SIFT scores) for combining a sighting."""
         try:
-            img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw)))
+            original = Image.open(io.BytesIO(raw))
+            taken = taken_at(original)
+            img = ImageOps.exif_transpose(original)
         except Exception:
             raise HTTPException(400, f"could not read {filename}")
+        note_meta(upload_id, filename, taken)
         img = img.convert("RGB")
         img.thumbnail((MAX_SIDE, MAX_SIDE))
         path = UPLOADS / f"{upload_id}.jpg"
@@ -550,11 +576,28 @@ th{color:var(--muted);font-weight:500}td.ok{color:var(--ok);font-weight:600}td.m
 .ans{min-width:230px}.ans select{font:inherit;font-size:13px;padding:4px;max-width:150px}
 .ans button{font:inherit;font-size:12px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);cursor:pointer;margin:2px 2px 0 0}
 .ans .now{font-weight:600;margin-bottom:4px}tr.answered{background:color-mix(in srgb,var(--hit) 40%,transparent)}
-.big{font-size:20px;font-weight:600}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.big{font-size:20px;font-weight:600}th.sort{cursor:pointer;color:var(--ok);white-space:nowrap}th.sort:hover{text-decoration:underline}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
 svg text{fill:var(--muted);font-size:11px}
 """
 
 REVIEW_SCRIPT = """
+let sortState = {key: 'taken', dir: 1};
+document.addEventListener('click', e => {
+  const th = e.target.closest('th.sort'); if(!th) return;
+  const key = th.dataset.key;
+  sortState = {key, dir: sortState.key === key ? -sortState.dir : (key === 'spot' ? -1 : 1)};
+  const tb = document.querySelector('#photos tbody');
+  const rows = [...tb.querySelectorAll('tr[data-taken]')];
+  const val = r => key === 'spot' ? (r.dataset.spot === '' ? -1 : parseFloat(r.dataset.spot)) : (r.dataset[key] || '');
+  rows.sort((a, b) => {
+    const x = val(a), y = val(b);
+    const c = (typeof x === 'number') ? x - y : x.localeCompare(y, undefined, {numeric: true});
+    return c * sortState.dir || a.dataset.taken.localeCompare(b.dataset.taken);
+  });
+  rows.forEach(r => tb.appendChild(r));
+  document.querySelectorAll('th.sort').forEach(h => h.textContent = h.textContent.replace(/ [↑↓↕]$/, '') +
+    (h.dataset.key === key ? (sortState.dir > 0 ? ' ↑' : ' ↓') : ' ↕'));
+});
 document.addEventListener('click', async e => {
   const b = e.target.closest('button[data-verdict]'); if(!b) return;
   const uid = b.dataset.uid, verdict = b.dataset.verdict;
@@ -593,6 +636,9 @@ def summary_html(classes=(), sort="time"):
         except (KeyError, ValueError):
             return None
 
+    taken = {}
+    if META.exists():
+        taken = {r["upload_id"]: r["taken"] for r in csv.DictReader(META.open())}
     recs = []
     for uid in {r["upload_id"] for r in rows if r["event"] == "identify" and r["method"] != "sighting"}:
         fb = truth.get(uid) or truth.get(set_of.get(uid, ""))
@@ -601,12 +647,10 @@ def summary_html(classes=(), sort="time"):
         any_row = next(r for (u, _), r in preds.items() if u == uid)
         best = top5(uid, "best")
         recs.append({"uid": uid, "file": any_row["filename"], "time": any_row["time"], "spot": spot_of(uid),
+                     "taken": taken.get(uid, ""),
                      "verdict": verdict, "true": true_name, "best": best[0] if best else "",
                      "right": bool(true_name and best and best[0] == true_name)})
-    if sort == "spot":
-        recs.sort(key=lambda r: (r["spot"] is None, r["spot"] if r["spot"] is not None else 0))
-    else:
-        recs.sort(key=lambda r: r["time"], reverse=True)
+    recs.sort(key=lambda r: r["taken"] or r["time"])
 
     # --- method comparison
     m = session_stats().get("methods", {})
@@ -678,10 +722,15 @@ def summary_html(classes=(), sort="time"):
         now = ("Matches " + esc(r["true"])) if r["verdict"] == "known" else esc(r["verdict"].replace("_", " ")) or \
               "<span class='muted'>not confirmed</span>"
         band = band_of(r["spot"])
+        turtle = r["true"] if r["verdict"] == "known" else (r["best"] if not r["verdict"] else r["verdict"].replace("_", " "))
         body.append(
-            f"<tr id='row-{uid}' class='{'answered' if r['verdict'] else ''}'>"
-            f"<td class='thumbs'>{thumbs}<div class='muted'>{esc(r['file'])}<br>{esc(r['time'][11:16])}"
-            f"{' · set ' + esc(set_of[uid][-6:]) if uid in set_of else ''}</div></td>"
+            f"<tr id='row-{uid}' class='{'answered' if r['verdict'] else ''}' data-taken='{esc(r['taken'] or r['time'].replace('T', ' '))}'"
+            f" data-turtle='{esc(turtle.lower())}' data-spot='{'' if r['spot'] is None else r['spot']}' data-file='{esc(r['file'].lower())}'>"
+            f"<td class='thumbs'>{thumbs}</td>"
+            f"<td><b>{esc(r['taken'][:10]) or '–'}</b><br>{esc(r['taken'][11:16])}"
+            f"<div class='muted'>{'' if r['taken'] else 'uploaded ' + esc(r['time'][11:16])}</div></td>"
+            f"<td><b>{esc(turtle)}</b><div class='muted'>{'confirmed' if r['verdict'] == 'known' else ('your answer' if r['verdict'] else 'best guess')}</div></td>"
+            f"<td class='muted'>{esc(r['file'])}{'<br>set ' + esc(set_of[uid][-6:]) if uid in set_of else ''}</td>"
             f"<td>{'' if r['spot'] is None else r['spot']}<br><span class='chip b-{band.split()[0] if band else ''}'>{band}</span></td>"
             f"<td class='ans'><div class='now' id='now-{uid}'>{now}</div>"
             f"<select id='sel-{uid}' aria-label='Turtle'>{opts(r['true'] or r['best'])}</select>"
@@ -725,10 +774,12 @@ def summary_html(classes=(), sort="time"):
 {method_rows or '<tr><td colspan=4 class=muted>Confirm some photos below to score the methods.</td></tr>'}</table></div>
 
 <h2>Every photo</h2>
-<div class="muted" style="margin-bottom:6px">Sort: <a href="/summary?sort=time">newest first</a> · <a href="/summary?sort=spot">lowest spot score first</a>.
+<div class="muted" style="margin-bottom:6px">One photo per row. <b>Click a column header to sort</b> (again to reverse); sorting by turtle groups each turtle's photos.
 Pick the turtle and tap <b>Matches</b>, or tap <b>New turtle</b> / <b>Bad photo</b>. Click a photo to open it full size.</div>
-<div class="card"><table><tr><th>photo · shell crop</th><th>spot</th><th>your answer</th>{"".join(f"<th>{h}</th>" for _, h in cols)}</tr>
-{"".join(body) or '<tr><td colspan=9 class=muted>No photos yet.</td></tr>'}</table>
+<div class="card"><table id="photos"><thead><tr><th>photo · shell crop</th>
+<th class="sort" data-key="taken">taken ↕</th><th class="sort" data-key="turtle">turtle ↕</th><th class="sort" data-key="file">file ↕</th>
+<th class="sort" data-key="spot">spot ↕</th><th>your answer</th>{"".join(f"<th>{h}</th>" for _, h in cols)}</tr></thead>
+<tbody>{"".join(body) or '<tr><td colspan=12 class=muted>No photos yet.</td></tr>'}</tbody></table>
 <p class="muted">✓ right first time · (top 5) in the top 5 · ✗ not in the top 5.</p></div>
 
 <h2>Skipped: no turtle shell found</h2>
