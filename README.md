@@ -322,7 +322,7 @@ guess. For a single photo, matchers are side by side, best first:
 - **Spot match**: SIFT on the shell crop against every reference crop. A
   score of 4+ confirms a known turtle; below that the banner says it could be
   new, or a view we don't have. `--no-sift` to skip.
-- **Combined** (crop + tight, LDA), **whole photo**, **cropped to shell** and
+- **Embeddings only (crop + tight)** (LDA; no SIFT), **whole photo**, **cropped to shell** and
   **tight (inside shell)**: embedding matchers, each with a "weak match"
   banner whose cut-off is calibrated at startup on out-of-fold, other-day
   similarities to still recognise 80% of known turtles (`--keep-known`).
