@@ -445,6 +445,7 @@ h1{font-size:22px;margin:4px 0 2px}.sub{color:var(--muted);font-size:13px;margin
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px}
 label.drop{display:block;border:2px dashed var(--line);border-radius:12px;padding:22px;text-align:center;cursor:pointer;color:var(--muted)}
 label.drop b{color:var(--accent)}input[type=file]{display:none}
+label.drop.over{border-color:var(--accent);background:var(--hit);color:var(--ink)}
 .query{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap}.qimgs{display:flex;gap:6px;flex-wrap:wrap}.qimgs img{width:160px;max-width:100%;border-radius:8px}
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
 .col h2{font-size:16px;margin:0 0 8px}.cropimg{display:block;margin-bottom:8px}.cropimg img{max-height:180px;max-width:100%;border-radius:8px}
@@ -462,7 +463,7 @@ table{border-collapse:collapse;font-size:14px;width:100%}th,td{text-align:left;p
 <h1>Turtle ID</h1>
 <div class="sub"><span id="meta">loading…</span> · <a href="/crops" target="_blank">review reference crops</a></div>
 <div class="card">
-  <label class="drop"><input id="file" type="file" accept="image/*" multiple><b>Choose or take photos of one turtle</b><br>top, left and right of the shell, filling the frame. Several photos are combined.</label>
+  <label class="drop"><input id="file" type="file" accept="image/*" multiple><b>Choose, take or drop photos of one turtle</b><br>top, left and right of the shell, filling the frame. Several photos are combined.</label>
 </div>
 <div id="result"></div>
 <div class="card" id="stats"></div>
@@ -487,15 +488,31 @@ async function load(){
     `${label(m)}: ${x.n_ref} refs, "new" below ${x.threshold}`).join(' · ');
   showStats(INFO.stats);
 }
-$('file').onchange = async e => {
-  const files = [...e.target.files]; if(!files.length) return;
+let BUSY = false;
+async function upload(files){
+  files = files.filter(f => f.type.startsWith('image/') || /[.](heic|heif)$/i.test(f.name));
+  if(!files.length || BUSY) return;
+  BUSY = true;
   $('result').innerHTML = `<div class="card">Cropping, embedding and matching ${files.length > 1 ? files.length + ' photos' : ''}…</div>`;
-  const fd = new FormData(); files.forEach(f => fd.append('images', f));
-  const r = await fetch('/api/identify', {method:'POST', body:fd});
-  e.target.value = '';
-  if(!r.ok){ $('result').innerHTML = `<div class="card err">${esc((await r.json()).detail || 'failed')}</div>`; return; }
-  CUR = await r.json(); TRUTH = null; render();
-};
+  try {
+    const fd = new FormData(); files.forEach(f => fd.append('images', f));
+    const r = await fetch('/api/identify', {method:'POST', body:fd});
+    if(!r.ok){ $('result').innerHTML = `<div class="card err">${esc((await r.json().catch(() => ({}))).detail || 'Upload failed. Try again.')}</div>`; return; }
+    CUR = await r.json(); TRUTH = null; render();
+  } finally { BUSY = false; }
+}
+$('file').onchange = e => { const files = [...e.target.files]; e.target.value = ''; upload(files); };
+// Drag and drop anywhere on the page; several photos dropped together = one turtle.
+let dragDepth = 0;
+const drop = document.querySelector('label.drop');
+addEventListener('dragenter', e => { if([...e.dataTransfer.types].includes('Files')){ dragDepth++; drop.classList.add('over'); } });
+addEventListener('dragleave', () => { if(--dragDepth <= 0){ dragDepth = 0; drop.classList.remove('over'); } });
+addEventListener('dragover', e => { if([...e.dataTransfer.types].includes('Files')) e.preventDefault(); });
+addEventListener('drop', e => {
+  if(![...e.dataTransfer.types].includes('Files')) return;
+  e.preventDefault(); dragDepth = 0; drop.classList.remove('over');
+  upload([...e.dataTransfer.files]);
+});
 function column(method, r){
   if(r.error) return `<div class="card col"><h2>${label(method)}</h2><p class="err">${esc(r.error)}</p></div>`;
   const m = r.matches;
