@@ -190,6 +190,22 @@ def write_tidy():
     tmp.replace(TIDY)
 
 
+SKIPPED = ROOT / "results" / "skipped.csv"
+
+
+def log_skipped(photos):
+    """Photos left out of a batch run (e.g. no turtle shell), kept for spot-checking."""
+    SKIPPED.parent.mkdir(exist_ok=True)
+    new = not SKIPPED.exists()
+    with SKIPPED.open("a", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["time", "upload_id", "filename", "reason"])
+        if new:
+            w.writeheader()
+        for p in photos:
+            w.writerow({"time": datetime.now().isoformat(timespec="seconds"), "upload_id": p["upload_id"],
+                        "filename": p["filename"], "reason": p["skipped"]})
+
+
 def log(rows: list[dict]):
     LOG.parent.mkdir(exist_ok=True)
     new = not LOG.exists()
@@ -263,8 +279,8 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
         return PAGE
 
     @app.get("/summary", response_class=HTMLResponse)
-    def summary_page():
-        return summary_html()
+    def summary_page(sort: str = "time"):
+        return summary_html(classes, sort)
 
     @app.get("/summary.csv")
     def summary_csv():
@@ -303,7 +319,8 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
                 sift_job = embed_pool.submit(sift.query_scores, cpath)
         return box, out, sift_job
 
-    def process_photo(raw: bytes, filename: str, upload_id: str):
+    def process_photo(raw: bytes, filename: str, upload_id: str, with_gemini: bool = True,
+                      require_shell: bool = False):
         """Run every matcher on one photo. Returns its results, log rows, and the
         per-reference evidence (fused + SIFT scores) for combining a sighting."""
         try:
@@ -327,6 +344,9 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
         if crops_job:
             try:
                 box, crops, sift_job = crops_job.result()
+                if require_shell and box is None:  # batch mode: no turtle in this photo
+                    return {"upload_id": upload_id, "image": f"/uploads/{path.name}", "skipped": "no turtle shell found",
+                            "filename": filename}
                 for v, (cpath, job) in crops.items():
                     images[v] = f"/uploads/{cpath.name}"
                     try:
@@ -383,7 +403,7 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
                              "top5": ";".join(f"{x['name']}:{x['sim']}" for x in m),
                              "likely_new": int(r["likely_new"])})
         shortlist = next((results[k] for k in ("best", "combined") if "matches" in results.get(k, {})), None)
-        if use_gemini and shortlist and "crop" in images:
+        if use_gemini and with_gemini and shortlist and "crop" in images:
             g = gemini_pick(shortlist, images["crop"], upload_id)
             results = {k: v for k, v in [("best", results.get("best")), ("gemini", g),
                                          ("sift", results.get("sift"))] if v} | results
@@ -399,7 +419,8 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
                 "log_rows": log_rows, "evidence": evidence}
 
     @app.post("/api/identify")
-    def identify_upload(images: list[UploadFile] = File(...)):
+    def identify_upload(images: list[UploadFile] = File(...), gemini: str = Form("1"),
+                        require_shell: str = Form("0")):
         """One photo, or several photos of the same turtle (one sighting).
 
         Several photos are matched in parallel and combined by adding up each
@@ -407,8 +428,15 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
         top-1 from 0.85 (one photo) to 0.93 (whole sighting).
         """
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-")
-        jobs = [(f.file.read(), f.filename, stamp + uuid.uuid4().hex[:6]) for f in images]
+        jobs = [(f.file.read(), f.filename, stamp + uuid.uuid4().hex[:6], gemini != "0", require_shell == "1")
+                for f in images]
         photos = list(photo_pool.map(lambda a: process_photo(*a), jobs))
+        skipped = [p for p in photos if p.get("skipped")]
+        if skipped:
+            log_skipped(skipped)
+        photos = [p for p in photos if not p.get("skipped")]
+        if not photos:
+            return {"skipped": [{"filename": p["filename"], "reason": p["skipped"], "image": p["image"]} for p in skipped]}
         rows = [r for p in photos for r in p["log_rows"]]
         if len(photos) == 1:
             log(rows)
@@ -498,92 +526,217 @@ SUMMARY_METHODS = [("sighting", "All photos combined"), ("best", "SIFT + embeddi
                    ("crop", "Embeddings (shell crop)"), ("tight", "Embeddings (tight crop)")]
 
 
-def summary_html():
-    """Session report: per-matcher scores and every upload with its guesses vs the truth."""
+def band_of(spot):
+    """Spot-score band (different-day test: top pick right 98% / ~91% / 65% / 21%)."""
+    if spot is None:
+        return ""
+    return "Confirmed" if spot >= 4 else "Likely" if spot >= 2 else "Possible" if spot >= 1 else "No match"
+
+
+REVIEW_STYLE = """
+:root{--bg:#f6f4ee;--card:#fff;--ink:#1d2a22;--muted:#6b756e;--line:#e2ded3;--ok:#2f6b4f;--mid:#b5651d;--bad:#a33;--hit:#e5f0ea;--grey:#b8b2a4}
+@media (prefers-color-scheme: dark){:root{--bg:#141712;--card:#1c201a;--ink:#e6e9de;--muted:#9aa292;--line:#2f352b;--ok:#86b07a;--mid:#e3aa45;--bad:#e07e58;--hit:#22301f;--grey:#5b6257}}
+*{box-sizing:border-box}body{margin:0;padding:16px;font:15px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+main{max-width:1400px;margin:0 auto}h1{font-size:22px;margin:0 0 4px}h2{font-size:17px;margin:24px 0 8px}
+.muted{color:var(--muted);font-size:12px}a{color:var(--ok)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;overflow-x:auto;margin-bottom:12px}
+table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:500}td.ok{color:var(--ok);font-weight:600}td.mid{color:var(--mid)}td.bad{color:var(--bad)}
+.thumbs{min-width:190px}.thumbs img{height:84px;border-radius:6px;margin:0 4px 4px 0}
+.chip{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:600}
+.b-Confirmed{background:var(--hit);color:var(--ok)}.b-Likely{background:var(--hit);color:var(--ok)}
+.b-Possible{background:#fbeee0;color:var(--mid)}.b-No{background:#f6e3df;color:var(--bad)}
+@media (prefers-color-scheme: dark){.b-Possible{background:#3a2e17}.b-No{background:#3a201a}}
+.ans{min-width:230px}.ans select{font:inherit;font-size:13px;padding:4px;max-width:150px}
+.ans button{font:inherit;font-size:12px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);cursor:pointer;margin:2px 2px 0 0}
+.ans .now{font-weight:600;margin-bottom:4px}tr.answered{background:color-mix(in srgb,var(--hit) 40%,transparent)}
+.big{font-size:20px;font-weight:600}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+svg text{fill:var(--muted);font-size:11px}
+"""
+
+REVIEW_SCRIPT = """
+document.addEventListener('click', async e => {
+  const b = e.target.closest('button[data-verdict]'); if(!b) return;
+  const uid = b.dataset.uid, verdict = b.dataset.verdict;
+  const name = verdict === 'known' ? document.getElementById('sel-' + uid).value : '';
+  const fd = new FormData(); fd.append('upload_id', uid); fd.append('verdict', verdict); fd.append('true_name', name);
+  b.disabled = true;
+  const r = await fetch('/api/feedback', {method: 'POST', body: fd});
+  b.disabled = false;
+  const now = document.getElementById('now-' + uid);
+  if(!r.ok){ now.textContent = 'Could not save. Try again.'; return; }
+  now.textContent = verdict === 'known' ? 'Matches ' + name : verdict.replace('_', ' ');
+  document.getElementById('row-' + uid).classList.add('answered');
+  document.getElementById('stale').hidden = false;
+});
+"""
+
+
+def summary_html(classes=(), sort="time"):
+    """Review page: method comparison, new-turtle threshold analysis, and every photo with
+    its picks and tap-to-confirm controls."""
     esc = lambda t: html.escape(str(t), quote=True)
     pct = lambda a, b: f"{a}/{b} ({100 * a / b:.0f}%)" if b else "–"
     rows = list(csv.DictReader(LOG.open())) if LOG.exists() else []
     preds = {(r["upload_id"], r["method"]): r for r in rows if r["event"] == "identify"}
     truth = {r["upload_id"]: r for r in rows if r["event"] == "feedback"}  # last wins
-    stats = session_stats()
-    m = stats.get("methods", {})
+    sets = {r["upload_id"]: r["notes"][len("photos "):].split(";") for r in rows
+            if r["event"] == "identify" and r["method"] == "sighting"}
+    set_of = {pid: sid for sid, pids in sets.items() for pid in pids}
+    top5 = lambda uid, m: [x.rsplit(":", 1)[0] for x in preds[(uid, m)]["top5"].split(";")] if (uid, m) in preds else []
 
-    table = "".join(
+    def spot_of(uid):
+        b = preds.get((uid, "best"), {})
+        try:
+            return float(b.get("notes", "").replace("spot ", "")) if b.get("notes", "").startswith("spot") \
+                else float(preds[(uid, "sift")]["top1_sim"])
+        except (KeyError, ValueError):
+            return None
+
+    recs = []
+    for uid in {r["upload_id"] for r in rows if r["event"] == "identify" and r["method"] != "sighting"}:
+        fb = truth.get(uid) or truth.get(set_of.get(uid, ""))
+        verdict = fb["verdict"] if fb else ""
+        true_name = fb["true_name"] if verdict == "known" else None
+        any_row = next(r for (u, _), r in preds.items() if u == uid)
+        best = top5(uid, "best")
+        recs.append({"uid": uid, "file": any_row["filename"], "time": any_row["time"], "spot": spot_of(uid),
+                     "verdict": verdict, "true": true_name, "best": best[0] if best else "",
+                     "right": bool(true_name and best and best[0] == true_name)})
+    if sort == "spot":
+        recs.sort(key=lambda r: (r["spot"] is None, r["spot"] if r["spot"] is not None else 0))
+    else:
+        recs.sort(key=lambda r: r["time"], reverse=True)
+
+    # --- method comparison
+    m = session_stats().get("methods", {})
+    method_rows = "".join(
         f"<tr><td>{label}</td><td>{pct(x['top1'], x['known'])}</td><td>{pct(x['top5'], x['known'])}</td>"
-        f"<td>{pct(x['known'] - x['known_flagged_new'], x['known'])}</td><td>{pct(x['new_flagged'], x['new'])}</td></tr>"
+        f"<td>{pct(x['new_flagged'], x['new'])}</td></tr>"
         for key, label in SUMMARY_METHODS if (x := m.get(key)))
 
-    def verdict_of(uid):
-        fb = truth.get(uid)
-        if not fb:
-            return '<span class="muted">not recorded</span>', None
-        if fb["verdict"] == "known":
-            return esc(fb["true_name"]), fb["true_name"]
-        return esc(fb["verdict"].replace("_", " ")), None
+    # --- threshold analysis on confirmed photos (spot score of the SIFT + embeddings pick)
+    known = [r for r in recs if r["verdict"] == "known" and r["spot"] is not None]
+    new = [r for r in recs if r["verdict"] == "new_turtle" and r["spot"] is not None]
+    thr_rows = ""
+    for t in (0.5, 1, 1.5, 2, 2.5, 3, 4, 5):
+        k_above = [r for r in known if r["spot"] >= t]
+        thr_rows += (f"<tr><td>{t:g}</td><td>{pct(len(k_above), len(known))}</td>"
+                     f"<td>{pct(sum(r['right'] for r in k_above), len(k_above))}</td>"
+                     f"<td>{pct(sum(r['spot'] < t for r in new), len(new))}</td></tr>")
+    band_rows = ""
+    for band in ("Confirmed", "Likely", "Possible", "No match"):
+        inb = [r for r in recs if band_of(r["spot"]) == band]
+        kb = [r for r in inb if r["verdict"] == "known"]
+        band_rows += (f"<tr><td><span class='chip b-{band.split()[0]}'>{band}</span></td><td>{len(inb)}</td>"
+                      f"<td>{pct(sum(r['right'] for r in kb), len(kb))}</td>"
+                      f"<td>{sum(r['verdict'] == 'new_turtle' for r in inb)}</td>"
+                      f"<td>{sum(not r['verdict'] for r in inb)}</td></tr>")
 
-    def guess(uid, method, true_name):
-        p = preds.get((uid, method))
-        if not p:
+    # strip chart: every photo's spot score, by what it turned out to be
+    W, H, X0, XMAX = 900, 150, 130, 12.0
+    xs = lambda v: X0 + min(v, XMAX) / XMAX * (W - X0 - 20)
+    lanes = [("known, top pick right", lambda r: r["verdict"] == "known" and r["right"], "var(--ok)"),
+             ("known, top pick wrong", lambda r: r["verdict"] == "known" and not r["right"], "var(--mid)"),
+             ("new turtle", lambda r: r["verdict"] == "new_turtle", "var(--bad)"),
+             ("not confirmed yet", lambda r: not r["verdict"], "var(--grey)")]
+    svg = [f'<svg viewBox="0 0 {W} {H}" width="100%" role="img" aria-label="Spot scores by outcome">']
+    for v in (1, 2, 4):
+        svg.append(f'<line x1="{xs(v)}" x2="{xs(v)}" y1="8" y2="{H - 22}" stroke="var(--line)" stroke-dasharray="3 3"/>'
+                   f'<text x="{xs(v) + 3}" y="16">{v}</text>')
+    for v in (0, 6, 8, 10, 12):
+        svg.append(f'<text x="{xs(v) - 4}" y="{H - 6}">{v}{"+" if v == 12 else ""}</text>')
+    for i, (name, test, color) in enumerate(lanes):
+        y = 30 + i * 28
+        svg.append(f'<text x="4" y="{y + 4}">{name}</text>')
+        for j, r in enumerate([r for r in recs if test(r) and r["spot"] is not None]):
+            svg.append(f'<circle cx="{xs(r["spot"]):.1f}" cy="{y + (j % 3 - 1) * 5}" r="4.5" fill="{color}" opacity=".8">'
+                       f'<title>{esc(r["file"])}: spot {r["spot"]}</title></circle>')
+    svg.append("</svg>")
+
+    # --- photo rows
+    opts = lambda sel: "".join(f'<option{" selected" if c == sel else ""}>{esc(c)}</option>' for c in classes)
+    cols = [("best", "SIFT + emb."), ("sift", "SIFT only"), ("combined", "Emb. only"),
+            ("tight", "Emb. tight"), ("full", "Emb. whole"), ("gemini", "Gemini")]
+
+    def cell(uid, method, true_name):
+        t = top5(uid, method)
+        if not t:
             return "<td class='muted'>–</td>"
-        top5 = [x.rsplit(":", 1)[0] for x in p["top5"].split(";")]
-        mark = ""
+        mark, cls = "", ""
         if true_name:
-            mark = " ✓" if top5[0] == true_name else (" (top 5)" if true_name in top5 else " ✗")
-        cls = "ok" if mark == " ✓" else ("mid" if mark == " (top 5)" else ("bad" if mark else ""))
-        extra = f"<br><span class='muted'>{esc(p['notes'])}</span>" if method == "best" and p["notes"] else ""
-        return f"<td class='{cls}'>{esc(top5[0])}{mark}{extra}</td>"
+            mark, cls = ((" ✓", "ok") if t[0] == true_name else (" (top 5)", "mid") if true_name in t else (" ✗", "bad"))
+        return f"<td class='{cls}'>{esc(t[0])}{mark}</td>"
 
-    cols = ["best", "gemini", "sift", "combined", "full"]
-    head = "".join(f"<th>{dict(SUMMARY_METHODS)[c]}</th>" for c in cols)
-    sight_rows = {r["upload_id"]: r for r in rows if r["event"] == "identify" and r["method"] == "sighting"}
-    in_sighting = {pid: sid for sid, r in sight_rows.items() for pid in r["notes"][len("photos "):].split(";")}
-    photo_ids = sorted({r["upload_id"] for r in rows if r["event"] == "identify" and r["method"] != "sighting"}, reverse=True)
+    body = []
+    for r in recs:
+        uid = r["uid"]
+        crop = UPLOADS / f"{uid}_crop.jpg"
+        thumbs = (f'<a href="/uploads/{uid}.jpg" target="_blank"><img src="/uploads/{uid}.jpg" loading="lazy" alt=""></a>'
+                  + (f'<a href="/uploads/{uid}_crop.jpg" target="_blank"><img src="/uploads/{uid}_crop.jpg" loading="lazy" alt=""></a>'
+                     if crop.exists() else ""))
+        now = ("Matches " + esc(r["true"])) if r["verdict"] == "known" else esc(r["verdict"].replace("_", " ")) or \
+              "<span class='muted'>not confirmed</span>"
+        band = band_of(r["spot"])
+        body.append(
+            f"<tr id='row-{uid}' class='{'answered' if r['verdict'] else ''}'>"
+            f"<td class='thumbs'>{thumbs}<div class='muted'>{esc(r['file'])}<br>{esc(r['time'][11:16])}"
+            f"{' · set ' + esc(set_of[uid][-6:]) if uid in set_of else ''}</div></td>"
+            f"<td>{'' if r['spot'] is None else r['spot']}<br><span class='chip b-{band.split()[0] if band else ''}'>{band}</span></td>"
+            f"<td class='ans'><div class='now' id='now-{uid}'>{now}</div>"
+            f"<select id='sel-{uid}' aria-label='Turtle'>{opts(r['true'] or r['best'])}</select>"
+            f"<button data-uid='{uid}' data-verdict='known'>Matches</button><br>"
+            f"<button data-uid='{uid}' data-verdict='new_turtle'>New turtle</button>"
+            f"<button data-uid='{uid}' data-verdict='bad_photo'>Bad photo</button></td>"
+            + "".join(cell(uid, mth, r["true"]) for mth, _ in cols) + "</tr>")
 
-    body, seen = [], set()
-    for uid in photo_ids:
-        sid = in_sighting.get(uid)
-        if sid and sid in seen:
-            continue
-        group = [pid for pid in photo_ids if in_sighting.get(pid) == sid] if sid else [uid]
-        key = sid or uid
-        seen.add(key)
-        label, true_name = verdict_of(key)
-        thumbs = "".join(f'<img src="/uploads/{esc(pid)}.jpg" loading="lazy" alt="">' for pid in sorted(group))
-        files = ", ".join(esc(preds.get((pid, "full"), preds.get((pid, "best"), {})).get("filename", "")) for pid in sorted(group))
-        sighting_cell = guess(sid, "sighting", true_name) if sid else "<td class='muted'>single photo</td>"
-        first = True
-        for pid in sorted(group):
-            per = "".join(guess(pid, c, true_name) for c in cols)
-            if first:
-                body.append(f"<tr><td rowspan='{len(group)}' class='thumbs'>{thumbs}<div class='muted'>{files}</div></td>"
-                            f"<td rowspan='{len(group)}'>{label}</td>"
-                            f"{sighting_cell.replace('<td', f'<td rowspan={len(group)}', 1)}{per}</tr>")
-                first = False
-            else:
-                body.append(f"<tr>{per}</tr>")
+    skipped = list(csv.DictReader(SKIPPED.open())) if SKIPPED.exists() else []
+    no_turtle = [s for s in skipped if s["upload_id"]]
+    dupes = [s for s in skipped if not s["upload_id"]]
+    skipped_html = "".join(
+        f'<figure style="margin:0"><a href="/uploads/{esc(s["upload_id"])}.jpg" target="_blank">'
+        f'<img src="/uploads/{esc(s["upload_id"])}.jpg" loading="lazy" style="height:90px;border-radius:6px" alt=""></a>'
+        f'<figcaption class="muted">{esc(s["filename"])}</figcaption></figure>' for s in no_turtle)
+    dupes_html = ", ".join(f"{esc(s['filename'])} ({esc(s['reason'])})" for s in dupes)
 
-    n_sets = len(seen)
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Session Summary</title>
-<style>:root{{--bg:#f6f4ee;--card:#fff;--ink:#1d2a22;--muted:#6b756e;--line:#e2ded3;--ok:#2f6b4f;--mid:#b5651d;--bad:#a33}}
-@media (prefers-color-scheme: dark){{:root{{--bg:#141712;--card:#1c201a;--ink:#e6e9de;--muted:#9aa292;--line:#2f352b;--ok:#86b07a;--mid:#e3aa45;--bad:#e07e58}}}}
-body{{margin:0;padding:16px;font:15px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--ink)}}
-h1{{font-size:22px;margin:0 0 4px}}h2{{font-size:17px;margin:22px 0 8px}}.muted{{color:var(--muted);font-size:12px}}
-.card{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;overflow-x:auto}}
-table{{border-collapse:collapse;width:100%;font-size:14px}}th,td{{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}}
-th{{color:var(--muted);font-weight:500}}td.ok{{color:var(--ok);font-weight:600}}td.mid{{color:var(--mid)}}td.bad{{color:var(--bad)}}
-.thumbs img{{height:64px;border-radius:6px;margin:0 4px 4px 0}}.thumbs{{min-width:150px}}a{{color:var(--ok)}}</style></head>
-<body><h1>Session summary</h1>
-<div class="muted">{stats.get("uploads", 0)} photos in {n_sets} uploads · {stats.get("scored", 0)} photos with a recorded answer ·
-{stats.get("bad_photo", 0)} marked bad · <a href="/summary.csv">download the summary (CSV, one row per photo)</a> · <a href="/session_log.csv">raw log</a> · <a href="/">back to the app</a></div>
-<h2>How each matcher did</h2>
-<div class="card"><table><tr><th>matcher</th><th>right first time</th><th>right turtle in top 5</th>
-<th>known turtles confirmed / not flagged</th><th>new turtles flagged</th></tr>{table or '<tr><td colspan=5 class=muted>No answers recorded yet.</td></tr>'}</table>
-<p class="muted">Counts are photos, except "All photos combined", which counts multi-photo uploads. For SIFT-based matchers, "confirmed" means a spot-match score of 4 or more.</p></div>
-<h2>Every upload (newest first)</h2>
-<div class="card"><table><tr><th>photos</th><th>true answer</th><th>All photos combined</th>{head}</tr>{"".join(body) or '<tr><td colspan=8 class=muted>No uploads yet.</td></tr>'}</table>
-<p class="muted">✓ right first time · (top 5) right turtle was in the top 5 · ✗ not in the top 5. Under SIFT + embeddings: the spot-match score.</p></div>
-</body></html>"""
+    n_conf = len([r for r in recs if r["verdict"]])
+    page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Turtle ID Review</title>
+<style>{REVIEW_STYLE}</style></head><body><main>
+<h1>Turtle ID review</h1>
+<div class="muted">{len(recs)} photos matched · {n_conf} confirmed · {len(no_turtle)} skipped (no turtle) · {len(dupes)} duplicates skipped ·
+<a href="/summary.csv">summary CSV</a> · <a href="/session_log.csv">raw log</a> · <a href="/">back to the app</a></div>
+<p id="stale" hidden class="muted" style="font-size:14px">Answers saved. <a href="">Refresh</a> to update the numbers.</p>
+
+<h2>Where is the "new turtle" line?</h2>
+<div class="card">{"".join(svg)}
+<p class="muted">Each dot is a photo, placed by its spot score (SIFT + embeddings pick; 12+ shown at 12). Hover for the file name. Confirm photos below to sort them into the right lane.</p></div>
+<div class="grid">
+<div class="card"><b>If we call anything below the cut-off a new turtle…</b>
+<table><tr><th>cut-off</th><th>known turtles kept</th><th>…and top pick right</th><th>new turtles caught</th></tr>{thr_rows}</table>
+<p class="muted">Confirmed photos only: {len(known)} known, {len(new)} new.</p></div>
+<div class="card"><b>By band</b>
+<table><tr><th>band</th><th>photos</th><th>known: top pick right</th><th>new</th><th>unconfirmed</th></tr>{band_rows}</table>
+<p class="muted">On the earlier different-day test the top pick was right 98% (Confirmed, 4+), ~91% (Likely, 2–4), 65% (Possible, 1–2) and 21% (No match, under 1) of the time.</p></div>
+</div>
+
+<h2>How each method did</h2>
+<div class="card"><table><tr><th>method</th><th>right first time</th><th>right turtle in top 5</th><th>new turtles flagged (spot &lt; 4 / weak)</th></tr>
+{method_rows or '<tr><td colspan=4 class=muted>Confirm some photos below to score the methods.</td></tr>'}</table></div>
+
+<h2>Every photo</h2>
+<div class="muted" style="margin-bottom:6px">Sort: <a href="/summary?sort=time">newest first</a> · <a href="/summary?sort=spot">lowest spot score first</a>.
+Pick the turtle and tap <b>Matches</b>, or tap <b>New turtle</b> / <b>Bad photo</b>. Click a photo to open it full size.</div>
+<div class="card"><table><tr><th>photo · shell crop</th><th>spot</th><th>your answer</th>{"".join(f"<th>{h}</th>" for _, h in cols)}</tr>
+{"".join(body) or '<tr><td colspan=9 class=muted>No photos yet.</td></tr>'}</table>
+<p class="muted">✓ right first time · (top 5) in the top 5 · ✗ not in the top 5.</p></div>
+
+<h2>Skipped: no turtle shell found</h2>
+<div class="card" style="display:flex;flex-wrap:wrap;gap:8px">{skipped_html or '<span class=muted>None.</span>'}</div>
+<h2>Skipped: duplicates</h2>
+<div class="card muted" style="font-size:13px">{dupes_html or 'None.'}</div>
+</main><script>{REVIEW_SCRIPT}</script></body></html>"""
+    return page
 
 
 def crops_review_html():
@@ -767,14 +920,21 @@ addEventListener('drop', e => {
   e.preventDefault(); dragDepth = 0; drop.classList.remove('over');
   upload([...e.dataTransfer.files]);
 });
+// Spot-score bands, from the different-day test (how often the top pick was right):
+// 4+ 98%, 2-4 ~91%, 1-2 65%, under 1 21%.
+function spotBanner(s, name){
+  const n = esc(name);
+  if(s >= 4) return `<div class="banner known">Confirmed by spot match: ${n} (score ${s})</div>`;
+  if(s >= 2) return `<div class="banner known">Likely match: ${n} (score ${s}; ~91% right in testing)</div>`;
+  if(s >= 1) return `<div class="banner new">Possible match: ${n} (score ${s}; ~65% right in testing). Check by eye</div>`;
+  return `<div class="banner new">No spot match found (score ${s}): could be a new turtle, or a view we don't have</div>`;
+}
 function column(method, r){
   if(r.error) return `<div class="card col" id="col-${method}"><h2>${label(method)}</h2><p class="err">${esc(r.error)}</p></div>`;
   const m = r.matches;
   const spot = r.spot ?? m[0].sim;
   const banner = (method === 'sift' || r.spot !== undefined)
-    ? (r.likely_new
-      ? `<div class="banner new">No confirming spot match (score ${spot} &lt; ${r.threshold}): could be a new turtle, or a view we don't have</div>`
-      : `<div class="banner known">Confirmed by spot match: ${esc(m[0].name)} (score ${spot})</div>`)
+    ? spotBanner(spot, m[0].name)
     : r.likely_new
     ? `<div class="banner new">Weak match, could be a new turtle: best ${m[0].sim}, cut-off ${r.threshold}</div>`
     : `<div class="banner known">Best: ${esc(m[0].name)} (${m[0].sim})</div>`;
