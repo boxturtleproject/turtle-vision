@@ -126,9 +126,11 @@ turtle is found when the only photos of it on file are years old
 | 2+ years away | 289 | 82.4% | 86.2% | 60.9% | 0 |
 | 3+ years away | 190 | 72.1% | 76.8% | 53.7% | 0 |
 
-A long gap makes the matcher less sure, never confidently wrong: more returning turtles
-land in Check or Possibly new. So the risk at sites with old archives is a returning
-turtle being registered as new, and fresh photos each season keep matching strong.
+A long gap makes the matcher less sure, never confidently wrong. But the drop is not the
+shell changing: matched against one other encounter at a time, with a photo of the same
+side, the right turtle is found first 81% of the time under a year apart and 86% at 3+
+years. The drop above comes from fewer photos being left to match against. Adult markings
+are stable; what matters is a good photo of each side on file.
 
 ## Data finding: misfiled photos, not duplicate turtles
 

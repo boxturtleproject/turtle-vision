@@ -15,13 +15,32 @@ With the 10 photos the October audit confirmed as misfiled or unusable left out:
 | 2+ years away | 289 | 82.4% | 86.2% | 60.9% | 0 |
 | 3+ years away | 190 | 72.1% | 76.8% | 53.7% | 0 |
 
-- Shells change slowly, but after 3+ years about one in four returning turtles is not
-  found first, and under half get a confident Match.
+- When only photos 3+ years away are allowed, about one in four returning turtles is not
+  found first, and under half get a confident Match. **This is not the shell changing**
+  (see the control below): it is the smaller set of photos left to match against.
 - A long gap never produced a confident wrong Match once the misfiled photos were removed
   (with them, wrong Matches rose from 6 to 12, all through those photos). The turtle
   drops to Check or Possibly new instead.
-- So at sites with old archives the risk is a returning turtle registered as new. The
-  "before creating a new turtle" check, and fresh reference photos each season, address it.
+- So the risk at sites with thin or old archives is a returning turtle registered as new.
+  The "before creating a new turtle" check addresses it, and so does a complete, good
+  set of photos per turtle (top, left and right).
+
+## Control: is it the years or the photos? (`gap_control.py`, `gap_control_results.txt`)
+
+Matching each top or side photo against **one** other encounter of its turtle at a time,
+one that has a photo of the same side, so every comparison has about the same photos:
+
+| gap between the two encounters | comparisons | found first | median spot score |
+|---|---|---|---|
+| under 1 year | 1,115 | 81% | 3.4 |
+| 1–2 years | 558 | 77% | 2.7 |
+| 2–3 years | 351 | 84% | 3.3 |
+| 3+ years | 291 | 86% | 3.1 |
+
+No decline with the years, and photos from 2020–2025 carry about the same number of spot
+features (840–920 per photo). Adult shell markings are stable, as the field team expects.
+What matters is having good photos of each side on file; old photos stay useful unless
+the shell has since been damaged (predation, injury, disease).
 
 The embedding projection (LDA) is fitted with the query's own encounter held out but other
 encounters of the turtle kept, so the SIFT column is the cleaner measure of long gaps.
