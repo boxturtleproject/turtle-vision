@@ -99,6 +99,12 @@ table is more honest than a fitted formula:
 The low-score rows depend on how many submissions are new turtles (45% in this field
 set); the high-score rows barely do.
 
+Both apps show it next to the spot score, rounded and capped at 98%
+(`sift_match.LIKELY`): under 0.8 ~5%, 0.8–1 ~15%, 1–1.2 ~30%, 1.2–1.5 ~45% (~30% with
+2+ photos, where a new turtle's best photo reaches 1.2 more often), 1.5–2 ~95%,
+2–3 ~97%, 3+ ~98%. Refit it from confirmed submissions; the review page lists the
+shown % beside how confirmed photos turned out.
+
 ## Data finding: Jigsaw = Cruella, Flower = Sunflower?
 
 In the reference test with each photo's own turtle removed, the only photos that still
