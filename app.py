@@ -82,7 +82,7 @@ class Index:
 
     def __init__(self, source: str, db: Path, pca_dim: int, lda: bool = False, keep_known=None):
         self.source, self.display = source, source
-        self.names, paths, X = identify.load_reference(identify.DROP, db)
+        self.names, paths, X = identify.load_reference(identify.DROP, db, skip_held_out=True)
         self.ids = [matching.capture_id_of(p) for p in paths]
         ref_dir = shellcrop.VARIANTS.get(source, {}).get("dir")
         # show the matching reference crops, e.g. data/crops_tight/<turtle>/<id>.jpg

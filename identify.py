@@ -22,6 +22,15 @@ ENV = ROOT / ".env"
 MODEL = "gemini-embedding-2-preview"
 DIM = 3072
 DROP = ("Juvenile",)  # 'Unidentified' already excluded by make_splits.py
+# Photos kept out of matching: confirmed misfiled or unusable photos, and placeholder
+# drawings (a blacklist, see analysis/index_images/). Reviewed by the field team.
+HELD_OUT = DATA / "held_out.csv"
+
+
+def held_out_ids():
+    if not HELD_OUT.exists():
+        return set()
+    return {int(r["capture_id"]) for r in csv.DictReader(HELD_OUT.open())}
 
 # Defaults: the headline winner from the PCA sweep (best test top-1 = 0.857).
 DEFAULT_PCA = 128
@@ -38,10 +47,14 @@ def load_env():
             os.environ.setdefault(k, v)
 
 
-def load_reference(drop, db=DB):
-    """Return (names, paths, X) for every labeled image we have an embedding for."""
+def load_reference(drop, db=DB, skip_held_out=False):
+    """Return (names, paths, X) for every labeled image we have an embedding for.
+
+    skip_held_out: leave out the photos in data/held_out.csv (the app does; the
+    accuracy tests keep the full labelled set so their figures stay comparable)."""
     splits = list(csv.DictReader(SPLITS.open()))
-    splits = [r for r in splits if r["turtle_name"] not in drop]
+    held = held_out_ids() if skip_held_out else set()
+    splits = [r for r in splits if r["turtle_name"] not in drop and int(r["capture_id"]) not in held]
     ids = [int(r["capture_id"]) for r in splits]
     con = sqlite3.connect(db)
     rows = con.execute(
