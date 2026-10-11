@@ -9,3 +9,5 @@ uvicorn>=0.29
 python-multipart>=0.0.9
 pillow>=10.0
 pillow-heif>=0.16       # iPhone HEIC uploads
+opencv-python-headless>=4.9   # SIFT spot matching (sift_match.py, app.py, audit)
+# torch>=2.4            # only for the SIFT study's GPU matcher (analysis/sift_study/lab_sift.py)

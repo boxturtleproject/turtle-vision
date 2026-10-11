@@ -146,6 +146,28 @@ python crop_photos.py     # ~628 Gemini box calls + embeddings
 python app.py
 ```
 
+### Setting up on a new machine
+
+Everything needed is committed except the photos, the embedding databases and `.env`;
+these steps rebuild them (about 15 minutes and well under $1 of Gemini calls):
+
+```bash
+git clone https://github.com/boxturtleproject/turtle-vision && cd turtle-vision
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env    # Vertex: GOOGLE_GENAI_USE_VERTEXAI=true, GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION
+gcloud auth application-default login
+python fetch_data.py    # ~1,000 reference photos from boxturtleid.com (public, no key)
+python embed_photos.py  # whole-photo embeddings
+python crop_photos.py   # shell + tight crops from the committed boxes (data/crops.csv), and their embeddings
+python app.py           # first start builds the SIFT feature cache
+```
+
+`data/capture_meta.csv` (dates, sides, encounters), `data/duplicate_pictures.csv` and
+`data/held_out.csv` are committed; `python fetch_meta.py` refreshes the first from the
+app. The field-test log and uploads (`results/`, `uploads/`) stay on the machine that ran
+the app. Re-running the SIFT study (`analysis/sift_study/`) also needs `torch`.
+
 `data/classifications.csv` and `data/splits.csv` are committed, so you can skip
 straight to step 5 if you don't want to re-classify. Step 4 (embeddings) is
 **required** for the classifier — the SQLite is excluded from git, so a
