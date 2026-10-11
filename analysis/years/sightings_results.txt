@@ -1,0 +1,14 @@
+Accuracy by how many OTHER sightings of the turtle are on file (10 confirmed problem photos removed)
+other sightings   photos  one photo  encounters  whole encounter  confident Match
+0                      6       0.0%           1               0%               0%
+1                     83      56.6%          14              71%              79%
+2                     26      96.2%           6             100%             100%
+3-4                   74      79.7%          13             100%              85%
+5-9                  210      94.8%          42             100%              98%
+10+                  107      99.1%          22             100%             100%
+
+Protocol era, only the 12 turtles photographed in both eras: photo vs ONE other encounter (same side available)
+  before 2024  vs before 2024    294 comparisons  found first  94.9%  median spot  6.4
+  before 2024  vs 2024+          437 comparisons  found first  83.1%  median spot  3.2
+  2024+        vs before 2024    494 comparisons  found first  82.4%  median spot  3.3
+  2024+        vs 2024+          927 comparisons  found first  73.8%  median spot  1.9

@@ -56,3 +56,40 @@ nothing good to match against: Bubbles' only other encounter is a different turt
 (confirmed in the audit), Flower_2's two encounters are five years apart, Strobe has a
 single encounter, and T039_70's April 2023 photos show a shell caked in dried mud.
 More photos of the query can't make up for missing or unusable reference photos.
+
+## How many sightings are on file (`sightings.py`, `sightings_results.txt`)
+
+With the confirmed problem photos removed:
+
+| other sightings of the turtle on file | one photo | whole encounter | confident Match |
+|---|---|---|---|
+| 1 | 57% | 71% (14 encounters) | 79% |
+| 2 | 96% | 100% (6) | 100% |
+| 3–4 | 80% | 100% (13) | 85% |
+| 5–9 | 95% | 100% (42) | 98% |
+| 10+ | 99% | 100% (22) | 100% |
+
+Once a turtle has two or more earlier sightings on file, every encounter in the test (83 of
+83) was named right. The weak spot is a turtle seen only once before. So a complete, good
+set of photos at a turtle's first encounters matters more than anything else.
+
+## Photo protocol era (`gap_control.py`)
+
+The field team standardized its photo protocol in 2024. Matched against one other
+encounter at a time, within the 12 turtles photographed in both eras:
+
+| photo from | other encounter from | found first | median spot score |
+|---|---|---|---|
+| before 2024 | before 2024 | 95% | 6.4 |
+| before 2024 | 2024 on | 83% | 3.2 |
+| 2024 on | 2024 on | 74% | 1.9 |
+
+Newer photos match each other less strongly, with the same turtles, framing (shell fills
+~57% of the frame) and resolution. Looking at the photos, newer ones are mostly taken where
+the turtle was found, in grass and leaves or in hand, with vegetation or fingers across
+the shell; older ones mostly on bare gravel. Anything covering the shell hides spots, so
+keeping the shell's surface clear is likely the fix.
+
+The photo set also holds 105 copies of a placeholder drawing attached as photos (mostly
+Cruella, Jigsaw, Compass and Unidentified); the classifier already keeps them out of
+matching.
