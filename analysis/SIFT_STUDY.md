@@ -130,7 +130,9 @@ A long gap makes the matcher less sure, never confidently wrong. But the drop is
 shell changing: matched against one other encounter at a time, with a photo of the same
 side, the right turtle is found first 81% of the time under a year apart and 86% at 3+
 years. The drop above comes from fewer photos being left to match against. Adult markings
-are stable; what matters is a good photo of each side on file.
+are stable; what matters is a good photo of each side on file. With two or more earlier
+sightings of a turtle on file, every whole encounter in the test was named right (83 of
+83); with only one, 71% ([`years/`](years/README.md)).
 
 ## Data finding: misfiled photos, not duplicate turtles
 

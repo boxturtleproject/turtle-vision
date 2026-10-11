@@ -53,3 +53,25 @@ for j in range(n):
         by_year[enc[j][:4]].append(kp[j])
 for y in sorted(by_year):
     print(f"  {y}: {len(by_year[y]):3} photos, median {int(np.median(by_year[y]))} spot features")
+
+
+# 3) protocol era: standardized photo protocol from 2024 on (field team)
+era = lambda d: "2024+" if d >= "2024" else "before 2024"
+pairs = collections.defaultdict(list)
+for res, q in zip(S["ref"], S["ref_q"]):
+    if not enc[q] or not side[q]:
+        continue
+    v, _ = score_vec(res, "mutg@0.8", S["kp_ref"], "grp")
+    for e in sorted({enc[j] for j in range(n) if NAMES[j] == NAMES[q] and enc[j] and enc[j] != enc[q]}):
+        if not any(NAMES[j] == NAMES[q] and enc[j] == e and meta[ids[j]]["view"] == meta[ids[q]]["view"] for j in range(n)):
+            continue
+        keep = np.array([NAMES[j] != NAMES[q] or enc[j] == e for j in range(n)]) & np.array([c not in DROP for c in ids])
+        sc = per_class(v, False, ~keep | (GROUPS == GROUPS[q]))
+        pairs[(era(enc[q]), era(e))].append((np.argmax(sc) == CIDX[q], float(np.nan_to_num(sc[CIDX[q]], neginf=0))))
+print("\nBy photo protocol era (standardized from 2024): photo matched against one other encounter")
+print(f"{'photo taken':14} {'other encounter':16} {'comparisons':>11} {'found first':>12} {'median spot':>12} {'spot >= 2':>10}")
+for a in ("before 2024", "2024+"):
+    for b in ("before 2024", "2024+"):
+        r = pairs[(a, b)]
+        if r:
+            print(f"{a:14} {b:16} {len(r):11} {np.mean([x[0] for x in r]):12.1%} {np.median([x[1] for x in r]):12.1f} {np.mean([x[1] >= 2 for x in r]):10.0%}")

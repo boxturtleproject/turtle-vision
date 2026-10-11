@@ -12,3 +12,10 @@ Shell features per photo by encounter year (top/left/right photos):
   2023:  84 photos, median 913 spot features
   2024:  99 photos, median 839 spot features
   2025: 131 photos, median 866 spot features
+
+By photo protocol era (standardized from 2024): photo matched against one other encounter
+photo taken    other encounter  comparisons  found first  median spot  spot >= 2
+before 2024    before 2024              449        92.4%          6.0        84%
+before 2024    2024+                    437        83.1%          3.2        65%
+2024+          before 2024              494        82.4%          3.3        64%
+2024+          2024+                    935        74.0%          1.9        49%
