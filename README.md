@@ -19,7 +19,8 @@ turtles. Full write-up: [`analysis/FIELD_TEST.md`](analysis/FIELD_TEST.md).
 descriptors lifts SIFT + embeddings to **96% right first time** (98% top 5)
 on those field photos and 0.886 on the different-day test, with much cleaner
 new-turtle separation. `sift_match.py` now uses it; spot-score bands are
-Match ≥ 2, Check 1.2–2, Possibly new below. Write-up:
+Match ≥ 2, Check 1.2–2, Possibly new below, and each spot score is shown
+with how often the top pick was right at that score ("~95% likely"). Write-up:
 [`analysis/SIFT_STUDY.md`](analysis/SIFT_STUDY.md).
 
 ## Headline result
@@ -322,7 +323,9 @@ cut-off calibration, ranking) lives in `matching.py`.
 SIFT spot matcher on shell crops: box-turtle-id's keypoints, scored by mutual
 RootSIFT matches (see the results above and `analysis/SIFT_STUDY.md`). Spot
 bands: ≥ 2 match, 1.2–2 check (1.5–2 with several photos), below that
-possibly new (`band_of`). Reference crop features are cached in
+possibly new (`band_of`). `likelihood` turns a spot score into "% likely",
+a lookup table measured on the field photos (`LIKELY`; 1.2–1.5 shows ~45%,
+~30% with several photos; capped at 98%). Reference crop features are cached in
 `data/sift_crop250.pkl` (gitignored, ~70 MB).
 `python evaluate.py --sift` re-runs its different-day test.
 
@@ -343,6 +346,9 @@ guess. For a single photo, matchers are side by side, best first:
 - **Spot match**: SIFT on the shell crop against every reference crop. Spot
   score 2+ = **Match**, 1.2–2 = **Check** (1.5–2 with several photos), below
   that **Possibly new** (or a view we don't have). `--no-sift` to skip.
+  Every spot score is shown with its likelihood, e.g. "spot score 3.4 · ~98%
+  likely", in the banners, each top-5 candidate and the at-a-glance table; the
+  review page compares those numbers with your confirmed photos.
 - **Embeddings only (crop + tight)** (LDA; no SIFT), **whole photo**, **cropped to shell** and
   **tight (inside shell)**: embedding matchers, each with a "weak match"
   banner whose cut-off is calibrated at startup on out-of-fold, other-day

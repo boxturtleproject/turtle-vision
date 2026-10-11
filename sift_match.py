@@ -24,6 +24,10 @@ Spot-score bands (the top turtle's score, new scale):
   < 1.2   possibly new  catches 96.5% of new turtles
 With 2+ photos the check zone starts at 1.5: a new turtle's best photo of
 several more often reaches 1.2 by chance.
+
+likelihood(): how often the top pick was right at that score (field photos,
+checked on the reference test; analysis/sift_study/likelihood.py), shown next
+to the score as "~95% likely".
 """
 import pickle
 from concurrent.futures import ThreadPoolExecutor
@@ -35,6 +39,11 @@ import numpy as np
 WIDTH = 250
 RATIO = 0.8
 MATCH, CHECK, CHECK_MULTI = 2.0, 1.2, 1.5
+# (lowest spot score, % of top picks right at that score), rounded and capped at 98%.
+# The low rows assume about as many new turtles as the field test (45%); refit them
+# from confirmed submissions.
+LIKELY = [(3.0, 98), (2.0, 97), (1.5, 95), (1.2, 45), (1.0, 30), (0.8, 15), (0.0, 5)]
+LIKELY_MULTI = 30  # 1.2-1.5 with 2+ photos: a new turtle's best photo gets there more often
 
 _sift = cv2.SIFT_create()
 
@@ -44,6 +53,13 @@ def band_of(spot, n_photos=1):
     if spot >= MATCH:
         return "match"
     return "check" if spot >= (CHECK if n_photos == 1 else CHECK_MULTI) else "possibly new"
+
+
+def likelihood(spot, n_photos=1):
+    """Rough % chance that the turtle with this spot score is the right one."""
+    if n_photos > 1 and CHECK <= spot < CHECK_MULTI:
+        return LIKELY_MULTI
+    return next(p for lo, p in LIKELY if spot >= lo)
 
 
 def features(path):

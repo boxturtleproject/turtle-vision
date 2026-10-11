@@ -11,6 +11,8 @@ best guess. A single photo shows these matchers side by side:
              (matching.fuse). Best on the different-day test. Its banner uses
              the spot-score bands: >= 2 match, 1.2-2 check (1.5-2 with
              several photos), below that possibly new (sift_match.band_of).
+             Every spot score is shown with its likelihood, "~95% likely"
+             (sift_match.likelihood).
   sift     — SIFT spot matcher on the shell crop against every reference
              crop: mutual RootSIFT matches (sift_match.py). ~88% top-1 on the
              different-day test.
@@ -552,6 +554,9 @@ SUMMARY_METHODS = [("sighting", "All photos combined"), ("best", "SIFT + embeddi
                    ("crop", "Embeddings (shell crop)"), ("tight", "Embeddings (tight crop)")]
 
 
+NEW_SPOT_SCALE = "2026-10-11"  # RootSIFT + mutual matches; spot scores logged before are on the old scale
+
+
 def band_of(spot):
     """Spot-score band of one photo: Match / Check / Possibly new (sift_match.band_of)."""
     if spot is None:
@@ -677,6 +682,16 @@ def summary_html(classes=(), sort="time"):
                       f"<td>{sum(r['verdict'] == 'new_turtle' for r in inb)}</td>"
                       f"<td>{sum(not r['verdict'] for r in inb)}</td></tr>")
 
+    # likelihood shown vs how confirmed photos turned out (data to refit sift_match.LIKELY)
+    likely_rows, conf = "", [r for r in recs if r["verdict"] in ("known", "new_turtle") and r["spot"] is not None
+                             and r["time"] >= NEW_SPOT_SCALE]
+    bins = sift_match.LIKELY[::-1]
+    for i, (lo, p) in enumerate(bins):
+        hi = bins[i + 1][0] if i + 1 < len(bins) else None
+        inb = [r for r in conf if r["spot"] >= lo and (hi is None or r["spot"] < hi)]
+        likely_rows += (f"<tr><td>{lo:g}{f'–{hi:g}' if hi else '+'}</td><td>~{p}%</td>"
+                        f"<td>{pct(sum(r['right'] for r in inb), len(inb))}</td></tr>")
+
     # strip chart: every photo's spot score, by what it turned out to be
     W, H, X0, XMAX = 900, 150, 130, 12.0
     xs = lambda v: X0 + min(v, XMAX) / XMAX * (W - X0 - 20)
@@ -722,6 +737,8 @@ def summary_html(classes=(), sort="time"):
         now = ("Matches " + esc(r["true"])) if r["verdict"] == "known" else esc(r["verdict"].replace("_", " ")) or \
               "<span class='muted'>not confirmed</span>"
         band = band_of(r["spot"])
+        likely = "" if r["spot"] is None or r["time"] < NEW_SPOT_SCALE \
+            else f"<div class='muted'>~{sift_match.likelihood(r['spot'])}% likely</div>"
         turtle = r["true"] if r["verdict"] == "known" else (r["best"] if not r["verdict"] else r["verdict"].replace("_", " "))
         body.append(
             f"<tr id='row-{uid}' class='{'answered' if r['verdict'] else ''}' data-taken='{esc(r['taken'] or r['time'].replace('T', ' '))}'"
@@ -731,7 +748,7 @@ def summary_html(classes=(), sort="time"):
             f"<div class='muted'>{'' if r['taken'] else 'uploaded ' + esc(r['time'][11:16])}</div></td>"
             f"<td><b>{esc(turtle)}</b><div class='muted'>{'confirmed' if r['verdict'] == 'known' else ('your answer' if r['verdict'] else 'best guess')}</div></td>"
             f"<td class='muted'>{esc(r['file'])}{'<br>set ' + esc(set_of[uid][-6:]) if uid in set_of else ''}</td>"
-            f"<td>{'' if r['spot'] is None else r['spot']}<br><span class='chip b-{band.split()[0] if band else ''}'>{band}</span></td>"
+            f"<td>{'' if r['spot'] is None else r['spot']}{likely}<br><span class='chip b-{band.split()[0] if band else ''}'>{band}</span></td>"
             f"<td class='ans'><div class='now' id='now-{uid}'>{now}</div>"
             f"<select id='sel-{uid}' aria-label='Turtle'>{opts(r['true'] or r['best'])}</select>"
             f"<button data-uid='{uid}' data-verdict='known'>Matches</button><br>"
@@ -767,6 +784,9 @@ def summary_html(classes=(), sort="time"):
 <div class="card"><b>By band</b>
 <table><tr><th>band</th><th>photos</th><th>known: top pick right</th><th>new</th><th>unconfirmed</th></tr>{band_rows}</table>
 <p class="muted">Bands from the October field test: Match (2+) named 127 known turtles, all right, and no new ones; Check (1.2–2) held 22 known (all right) and 5 new; Possibly new (under 1.2) caught 96.5% of new turtles. Scores logged before the RootSIFT + mutual-match change are on the old scale.</p></div>
+<div class="card"><b>Spot score as a likelihood</b>
+<table><tr><th>spot score</th><th>shown as</th><th>confirmed here: top pick right</th></tr>{likely_rows}</table>
+<p class="muted">Photos matched since the spot-score change ({esc(NEW_SPOT_SCALE[:10])}) only. "Shown as" = how often the top pick was right at that score in the October field test (capped at 98%). New turtles count as not right, so the low rows depend on how many new turtles turn up. With 2+ photos, 1.2–1.5 is shown as ~30%.</p></div>
 </div>
 
 <h2>How each method did</h2>
@@ -974,11 +994,23 @@ addEventListener('drop', e => {
 // Spot-score bands (sift_match.band_of), from the field test: 2+ match (all right, no new
 // turtles), 1.2-2 check (1.5-2 with several photos), below that possibly new (96.5% of new turtles).
 const bandOf = (s, nPhotos) => s >= 2 ? 'match' : s >= ((nPhotos || 1) > 1 ? 1.5 : 1.2) ? 'check' : 'possibly new';
+// How often the top pick was right at that spot score in the field test (sift_match.likelihood).
+const LIKELY = [[3, 98], [2, 97], [1.5, 95], [1.2, 45], [1, 30], [0.8, 15], [0, 5]];
+const likelyOf = (s, nPhotos) => (nPhotos || 1) > 1 && s >= 1.2 && s < 1.5 ? 30 : LIKELY.find(([lo]) => s >= lo)[1];
+const spotText = (s, nPhotos) => `spot score ${s} · ~${likelyOf(s, nPhotos)}% likely`;
+// A candidate's own spot score: SIFT ranks by it; fused results carry it on the reference photos.
+const candSpot = (method, r, x) => method === 'sift' ? x.sim
+  : r.spot !== undefined && x.refs?.length ? Math.max(...x.refs.map(f => f.sim)) : null;
 function spotBanner(s, name, nPhotos){
-  const n = esc(name), band = bandOf(s, nPhotos);
-  if(band === 'match') return `<div class="banner known">Match: ${n} (spot score ${s})</div>`;
-  if(band === 'check') return `<div class="banner new">Check: probably ${n} (spot score ${s}). Compare with the photos below</div>`;
-  return `<div class="banner new">Possibly a new turtle (spot score ${s}), or a view we don't have</div>`;
+  const n = esc(name), band = bandOf(s, nPhotos), t = spotText(s, nPhotos);
+  if(band === 'match') return `<div class="banner known">Match: ${n} (${t})</div>`;
+  if(band === 'check') return `<div class="banner new">Check: probably ${n} (${t}). Compare with the photos below</div>`;
+  return `<div class="banner new">Possibly a new turtle, or a view we don't have. Best guess ${n} (${t})</div>`;
+}
+function candLikely(method, r, x){
+  const s = candSpot(method, r, x);
+  if(s == null) return '';
+  return ` <span class="muted">${method === 'sift' ? '' : `spot ${s} · `}~${likelyOf(s, r.n_photos)}%</span>`;
 }
 function column(method, r){
   if(r.error) return `<div class="card col" id="col-${method}"><h2>${label(method)}</h2><p class="err">${esc(r.error)}</p></div>`;
@@ -991,7 +1023,7 @@ function column(method, r){
     : `<div class="banner known">Best: ${esc(m[0].name)} (${m[0].sim})</div>`;
   const thumb = method !== 'full' ? `<a class="cropimg" href="${r.image}" target="_blank"><img src="${r.image}" title="${r.box ? 'box ' + r.box : 'no shell found — full frame'}"></a>` : '';
   const rows = m.map((x, i) => `<div class="match ${TRUTH === x.name ? 'truth' : ''}">
-      <div><span class="name">${i+1}. ${esc(x.name)}</span> <span class="sim">${x.sim}</span></div>
+      <div><span class="name">${i+1}. ${esc(x.name)}</span> <span class="sim">${x.sim}</span>${candLikely(method, r, x)}</div>
       <button data-name="${esc(x.name)}" onclick="send('known', this.dataset.name)">This is it</button>
       <div class="refs">${x.refs.map(rf => `<img loading="lazy" src="/${esc(rf.path)}" title="${rf.sim}">`).join('')}</div>
     </div>`).join('');
@@ -1035,7 +1067,7 @@ function glance(){
     if(r.error) return `<tr><td>${label(m)}</td><td colspan="3" class="err">failed</td></tr>`;
     const top = r.matches[0], spot = r.spot ?? (m === 'sift' ? top.sim : null);
     const state = spot != null
-      ? (bandOf(spot, r.n_photos) === 'match' ? `<span class="okc">spot ${spot}, match</span>` : `<span class="warn">spot ${spot}, ${bandOf(spot, r.n_photos)}</span>`)
+      ? `<span class="${bandOf(spot, r.n_photos) === 'match' ? 'okc' : 'warn'}">spot ${spot} · ~${likelyOf(spot, r.n_photos)}% likely, ${bandOf(spot, r.n_photos)}</span>`
       : `<span class="muted">similarity ${top.sim}</span>`;
     const hit = TRUTH ? (top.name === TRUTH ? ' ✓' : (r.matches.some(x => x.name === TRUTH) ? ' (top 5)' : ' ✗')) : '';
     const [uses, , tested] = descOf(m);
