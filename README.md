@@ -351,7 +351,8 @@ Upload a photo, or several photos of one turtle (top, left and right of the
 shell), from a laptop or a phone on the same Wi-Fi. Several photos are
 matched in parallel and combined into one answer by adding up each turtle's
 SIFT + embeddings score across them: on the different-day test, a whole
-sighting got 0.92 top-1 against 0.84 for one photo (98 encounters with 2+ photos).
+sighting got 0.94 top-1 against 0.84 for one photo (99 encounters with 2+ photos;
+`analysis/years/encounters_test.py`).
 The result shows **All photos combined** first, then each photo's own best
 guess. For a single photo, matchers are side by side, best first:
 

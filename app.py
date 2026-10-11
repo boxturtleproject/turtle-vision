@@ -2,7 +2,7 @@
 
 Upload a carapace photo, or several photos of one turtle (top/left/right),
 from a laptop or a phone on the same Wi-Fi. Several photos are combined into
-one answer (each turtle's fused score added up across photos; 0.92 top-1 vs
+one answer (each turtle's fused score added up across photos; 0.94 top-1 vs
 0.84 for one photo on the different-day test), shown before each photo's own
 best guess. A single photo shows these matchers side by side:
 
@@ -481,7 +481,7 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
 
         Several photos are matched in parallel and combined by adding up each
         turtle's fused score across them; on the different-day test that took
-        top-1 from 0.84 (one photo) to 0.92 (whole sighting).
+        top-1 from 0.84 (one photo) to 0.94 (whole sighting).
         """
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-")
         jobs = [(f.file.read(), f.filename, stamp + uuid.uuid4().hex[:6], gemini != "0", require_shell == "1")
