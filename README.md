@@ -307,6 +307,12 @@ crops it two ways and embeds each (full frame if no shell is found):
 | `tight` | central 71% of the box (largest rectangle inside an ellipse) — all shell, loses marginal scutes | `data/crops_tight/<turtle>/<id>.jpg` | `data/embeddings_tight.sqlite` |
 
 Resume-safe. The crop logic lives in `shellcrop.py` and is shared with `app.py`.
+The same Gemini call also says which side of the turtle the photo shows
+(`shellcrop.detect` → `carapace_top` / `_left` / `_right` / `_side`, `plastron`,
+`front`, `rear`, `site_view`): left/right only when the head is visible, else
+"side". The app shows it under each photo, outlines same-side reference photos, and
+notes when the best guess has no photo of that side. Accuracy and why the side
+matters for SIFT: [`analysis/views/`](analysis/views/README.md).
 
 ### `fetch_meta.py`
 Writes `data/capture_meta.csv` (committed): date and view (`carapace_top`,

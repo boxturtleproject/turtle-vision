@@ -12,7 +12,9 @@ best guess. A single photo shows these matchers side by side:
              the spot-score bands: >= 2 match, 1.2-2 check (1.5-2 with
              several photos), below that possibly new (sift_match.band_of).
              Every spot score is shown with its likelihood, "~95% likely"
-             (sift_match.likelihood).
+             (sift_match.likelihood). The shell-box call also says which side
+             of the turtle the photo shows (shellcrop.view_of); it's shown
+             under the photo and saved to results/photo_views.csv.
   sift     — SIFT spot matcher on the shell crop against every reference
              crop: mutual RootSIFT matches (sift_match.py). ~88% top-1 on the
              different-day test.
@@ -207,6 +209,20 @@ def taken_at(img: Image.Image) -> str:
         return ""
 
 
+VIEWS = ROOT / "results" / "photo_views.csv"  # which side of the turtle each photo shows (Gemini)
+
+
+def note_view(upload_id, view):
+    with _meta_lock:
+        new = not VIEWS.exists()
+        VIEWS.parent.mkdir(exist_ok=True)
+        with VIEWS.open("a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["upload_id", "view"])
+            if new:
+                w.writeheader()
+            w.writerow({"upload_id": upload_id, "view": view})
+
+
 def note_meta(upload_id, filename, taken):
     with _meta_lock:
         new = not META.exists()
@@ -298,6 +314,13 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
     if sift and "combined" in matchers:
         assert sift.ids == matchers["combined"].parts[0].ids, "SIFT and embedding references differ"
         sift_cidx = np.array([sift.classes.index(n) for n in sift.names])
+    # side of each reference photo, from box-turtle-id (capture_meta.csv), and the sides on file per turtle
+    ref_view = ({r["capture_id"]: r["view"].replace("back", "rear") for r in csv.DictReader(matching.META.open())}
+                if matching.META.exists() else {})
+    views_on_file: dict[str, set] = {}
+    if sift:
+        for name, path in zip(sift.names, sift.paths):
+            views_on_file.setdefault(name, set()).add(ref_view.get(Path(path).stem, ""))
 
     @app.get("/", response_class=HTMLResponse)
     def home():
@@ -333,7 +356,7 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
 
     def run_crops(path: Path, img: Image.Image):
         """One box call, then save and embed every crop variant (and SIFT the shell crop) in parallel."""
-        box = shellcrop.detect_box(crop_client, img)
+        box, view = shellcrop.detect(crop_client, img)
         out, sift_job = {}, None
         for v in crop_variants:
             cpath = path.with_name(f"{path.stem}_{v}.jpg")
@@ -342,7 +365,7 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
             out[v] = (cpath, embed_pool.submit(identify.embed_image, cpath))
             if v == "crop" and sift:
                 sift_job = embed_pool.submit(sift.query_scores, cpath)
-        return box, out, sift_job
+        return box, view, out, sift_job
 
     def process_photo(raw: bytes, filename: str, upload_id: str, with_gemini: bool = True,
                       require_shell: bool = False):
@@ -363,7 +386,7 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
         # embeddings per source, run concurrently: whole photo || (box -> crops)
         full_job = pool.submit(identify.embed_image, path) if "full" in needed else None
         crops_job = pool.submit(run_crops, path, img) if crop_variants else None
-        vecs, images, errors, box, sift_job = {}, {"full": f"/uploads/{path.name}"}, {}, None, None
+        vecs, images, errors, box, sift_job, view = {}, {"full": f"/uploads/{path.name}"}, {}, None, None, ""
         if full_job:
             try:
                 vecs["full"] = full_job.result()
@@ -371,7 +394,8 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
                 errors["full"] = str(e)[:300]
         if crops_job:
             try:
-                box, crops, sift_job = crops_job.result()
+                box, view, crops, sift_job = crops_job.result()
+                note_view(upload_id, view)
                 if require_shell and box is None:  # batch mode: no turtle in this photo
                     return {"upload_id": upload_id, "image": f"/uploads/{path.name}", "skipped": "no turtle shell found",
                             "filename": filename}
@@ -392,6 +416,10 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
                     raise RuntimeError(errors.get("crop", "no shell crop"))
                 s_sift = sift_job.result()
                 m = sift.rank(s_sift)
+                for x in m:
+                    x["views"] = on_file(x["name"])
+                    for rf in x["refs"]:
+                        rf["view"] = ref_view.get(Path(rf["path"]).stem, "")
                 results["sift"] = {"image": images["crop"], "box": box, "matches": m,
                                    "likely_new": m[0]["sim"] < sift.threshold, "threshold": sift.threshold,
                                    "scale": "spot-match score"}
@@ -444,7 +472,7 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
                                     "top5": ";".join(f"{x['name']}:{x['sim']}" for x in m),
                                     "likely_new": int(g["likely_new"]), "notes": g["reason"]})
         return {"upload_id": upload_id, "image": f"/uploads/{path.name}", "methods": results,
-                "log_rows": log_rows, "evidence": evidence}
+                "log_rows": log_rows, "evidence": evidence, "view": view}
 
     @app.post("/api/identify")
     def identify_upload(images: list[UploadFile] = File(...), gemini: str = Form("1"),
@@ -468,7 +496,7 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
         rows = [r for p in photos for r in p["log_rows"]]
         if len(photos) == 1:
             log(rows)
-            return {k: photos[0][k] for k in ("upload_id", "image", "methods")}
+            return {**{k: photos[0][k] for k in ("upload_id", "image", "methods")}, "views": [photos[0]["view"]]}
         sid = "S" + stamp + uuid.uuid4().hex[:6]
         ids = [p["upload_id"] for p in photos]
         sightings[sid] = ids
@@ -486,7 +514,14 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
             methods[f"photo{k}"] = per.get("best") or next(iter(per.values()))
         log(rows)
         return {"upload_id": sid, "image": photos[0]["image"],
-                "images": [p["image"] for p in photos], "methods": methods}
+                "images": [p["image"] for p in photos], "methods": methods, "views": [p["view"] for p in photos]}
+
+    def ref_entry(j, spot):
+        return {"path": sift.paths[j], "sim": round(float(spot), 1),
+                "view": ref_view.get(Path(sift.paths[j]).stem, "")}
+
+    def on_file(name):
+        return sorted(v for v in views_on_file.get(name, ()) if v)
 
     def combine_sighting(photos, top=5, per_class=3):
         """Add up each turtle's fused score across photos; refs = best SIFT photos over all."""
@@ -497,7 +532,7 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
             mine = np.flatnonzero(sift_cidx == k)
             mine = mine[np.argsort(-S[mine])][:per_class]
             matches.append({"name": sift.classes[k], "sim": round(float(F[k]), 2),
-                            "refs": [{"path": sift.paths[j], "sim": round(float(S[j]), 1)} for j in mine]})
+                            "refs": [ref_entry(j, S[j]) for j in mine], "views": on_file(sift.classes[k])})
         spot = round(float(S[sift_cidx == sift.classes.index(matches[0]["name"])].max()), 1)
         return {"image": photos[0]["methods"]["best"]["image"], "box": None, "matches": matches,
                 "spot": spot, "likely_new": sift_match.band_of(spot, len(photos)) == "possibly new",
@@ -512,7 +547,7 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
             mine = np.flatnonzero(sift_cidx == k)
             mine = mine[np.lexsort((-s_emb[mine], -s_sift[mine]))][:per_class]
             matches.append({"name": sift.classes[k], "sim": round(float(fused[k]), 2),
-                            "refs": [{"path": sift.paths[j], "sim": round(float(s_sift[j]), 1)} for j in mine]})
+                            "refs": [ref_entry(j, s_sift[j]) for j in mine], "views": on_file(sift.classes[k])})
         spot = round(float(s_sift[sift_cidx == sift.classes.index(matches[0]["name"])].max()), 1)
         return {"image": image_url, "box": box, "matches": matches, "spot": spot,
                 "likely_new": spot < sift.threshold, "threshold": sift.threshold}
@@ -876,6 +911,7 @@ label.drop.busy::after{content:"Working on a set: drop more to queue them";displ
 .match.truth{background:var(--hit);margin:0 -8px;padding:8px}
 .match .name{font-weight:600}.match .sim{color:var(--muted);font-size:13px}
 .refs{grid-column:1/-1;display:flex;gap:6px;overflow-x:auto}.refs img{height:84px;border-radius:6px}
+.refs img.same{outline:3px solid #2e7d32;outline-offset:-3px}.qimgs figure{margin:0}.qimgs figcaption{font-size:12px;text-align:center}
 button{font:inherit;font-size:14px;border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 10px;cursor:pointer}
 .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}select,input[type=text]{font:inherit;padding:7px;border:1px solid var(--line);border-radius:8px}
 table{border-collapse:collapse;font-size:14px;width:100%}
@@ -896,6 +932,22 @@ const LABEL = {sighting: 'All photos combined (best)', best: 'SIFT + embeddings 
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const label = m => LABEL[m] || (m.startsWith('photo') ? `Photo ${m.slice(5)} alone` : m);
+// Which side of the turtle a photo shows (shellcrop.view_of; box-turtle-id image types).
+const VIEW_LABELS = {carapace_top: 'top', carapace_left: 'left side', carapace_right: 'right side',
+  carapace_side: 'side', plastron: 'bottom (plastron)', front: 'front', rear: 'rear', site_view: 'site view'};
+const SIDES = {carapace_top: ['carapace_top'], carapace_left: ['carapace_left'], carapace_right: ['carapace_right'],
+  carapace_side: ['carapace_left', 'carapace_right']};
+// The query photo sides behind a column: one photo's, or every photo's for the sighting.
+const viewsOf = method => method === 'sighting' ? (CUR.views || [])
+  : method.startsWith('photo') ? [(CUR.views || [])[+method.slice(5) - 1]] : [(CUR.views || [])[0]];
+const sameSide = (method, refView) => !!refView && viewsOf(method).some(v => (SIDES[v] || []).includes(refView));
+// Most spot matches come from a photo of the same side, so say so when the best guess has none.
+function sideNote(method, top){
+  if(!top.views) return '';
+  const missing = viewsOf(method).filter(v => SIDES[v] && !SIDES[v].some(s => top.views.includes(s)));
+  if(!missing.length || missing.length < viewsOf(method).filter(v => SIDES[v]).length) return '';
+  return `<p class="muted">No ${esc([...new Set(missing.map(v => VIEW_LABELS[v]))].join(' or '))} photo of ${esc(top.name)} on file, so a low spot score is expected even if it is ${esc(top.name)}.</p>`;
+}
 const pct = (a, b) => b ? `${a}/${b} (${Math.round(100*a/b)}%)` : '–';
 function showStats(s){
   if(!s || !s.uploads){ $('stats').innerHTML = '<span class="muted">No uploads yet this session.</span>'; return; }
@@ -1025,12 +1077,13 @@ function column(method, r){
   const rows = m.map((x, i) => `<div class="match ${TRUTH === x.name ? 'truth' : ''}">
       <div><span class="name">${i+1}. ${esc(x.name)}</span> <span class="sim">${x.sim}</span>${candLikely(method, r, x)}</div>
       <button data-name="${esc(x.name)}" onclick="send('known', this.dataset.name)">This is it</button>
-      <div class="refs">${x.refs.map(rf => `<img loading="lazy" src="/${esc(rf.path)}" title="${rf.sim}">`).join('')}</div>
+      <div class="refs">${x.refs.map(rf => `<img loading="lazy" src="/${esc(rf.path)}" class="${sameSide(method, rf.view) ? 'same' : ''}" title="spot ${rf.sim}${rf.view ? ' · ' + (VIEW_LABELS[rf.view] || rf.view) : ''}">`).join('')}</div>
     </div>`).join('');
   const reason = r.reason ? `<p class="muted">Gemini: ${esc(r.reason)}</p>` : '';
   const [uses, how, tested] = descOf(method);
   const desc = uses ? `<div class="desc"><b>${esc(uses)}</b><br>${esc(how)}${tested ? `<br><i>${esc(tested)}</i>` : ''}</div>` : '';
-  return `<div class="card col" id="col-${method}"><h2>${label(method)}${method !== 'full' && !r.box ? ' <span class="muted">(no shell found)</span>' : ''}</h2>${desc}${thumb}${banner}${reason}${rows}</div>`;
+  const note = (r.spot !== undefined || method === 'sift') && bandOf(spot, r.n_photos) !== 'match' ? sideNote(method, m[0]) : '';
+  return `<div class="card col" id="col-${method}"><h2>${label(method)}${method !== 'full' && !r.box ? ' <span class="muted">(no shell found)</span>' : ''}</h2>${desc}${thumb}${banner}${note}${reason}${rows}</div>`;
 }
 // What each method is, in plain words. Tested = the different-day test (534 photos matched only
 // against photos of the same turtle from other days): right first time / right turtle in the top 5.
@@ -1088,7 +1141,10 @@ function slide(dir){
 }
 function render(){
   const opts = INFO.classes.map(c => `<option>${esc(c)}</option>`).join('');
-  const queryImgs = (CUR.images || [CUR.image]).map(u => `<img src="${u}">`).join('');
+  const queryImgs = (CUR.images || [CUR.image]).map((u, i) => {
+    const v = (CUR.views || [])[i];
+    return `<figure><img src="${u}"><figcaption class="muted">${v ? 'Photo: ' + esc(VIEW_LABELS[v] || v) : ''}</figcaption></figure>`;
+  }).join('');
   $('result').innerHTML = `<div class="card"><div class="query"><div class="qimgs">${queryImgs}</div>
       <div style="flex:1;min-width:240px"><b>${CUR.images ? 'Which turtle are these photos of?' : 'What is it really?'}</b>
         <div class="muted">Tap "This is it" on the right turtle below, or:</div>

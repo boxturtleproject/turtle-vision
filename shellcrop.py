@@ -9,6 +9,14 @@ with minimal thinking on a 640px image found every shell with tight boxes in
 ~1.3s. gemini-2.5-flash was looser on 3/9 (included hands/background),
 3.5-flash-lite missed 2 obvious shells, 3.8-flash missed 1 and was slowest.
 Box coords are relative, so downscaling before detection costs nothing.
+
+The same call also says which view the photo shows, as box-turtle-id's image
+types (carapace_top / _left / _right, plastron, front, rear, site_view), plus
+carapace_side for a side view whose head isn't visible. On 1,000 reference
+photos (analysis/views/): top 232/234 right; left/right named 304 times with 9
+swaps (some look like labelling mistakes), "side" for a third of them; front,
+rear and site views are often called top. Boxes match the box-only prompt
+(median overlap 0.99).
 """
 import io
 import json
@@ -34,9 +42,32 @@ PROMPT = (
     "Find the box turtle's carapace (the top shell) in this photo. Return a "
     "tight bounding box around the shell only — exclude the head, legs, hands, "
     "and background. If there is no turtle shell visible, set found to false. "
-    'Respond as JSON: {"found": bool, "box_2d": [ymin, xmin, ymax, xmax]} '
-    "normalized to 0-1000."
+    "Also say what kind of photo it is: "
+    "top (camera above the turtle looking down on the top shell), "
+    "side (camera level with the turtle, seeing the shell from the side), "
+    "plastron (the bottom shell), front (facing the head), rear (facing the tail end), "
+    "or site_view (a wide habitat scene; the turtle is small or not visible). "
+    "For a side photo, also say which way the turtle's head points in the image: "
+    "left or right only if you can actually see the head; if the head is pulled into "
+    "the shell or out of view, say unclear. "
+    'Respond as JSON: {"found": bool, "box_2d": [ymin, xmin, ymax, xmax], '
+    '"photo": string, "head": "left" | "right" | "unclear"} with box_2d normalized to 0-1000.'
 )
+# Asking which way the head points, and only when it's visible, never swapped left
+# and right on a 40-photo check; asking for "the turtle's left side" swapped 4 of 19.
+VIEW_LABELS = {"carapace_top": "top", "carapace_left": "left side", "carapace_right": "right side",
+               "carapace_side": "side", "plastron": "bottom (plastron)", "front": "front",
+               "rear": "rear", "site_view": "site view"}
+
+
+def view_of(answer: dict) -> str:
+    """Gemini's photo/head answer as a box-turtle-id image type ('' if unknown).
+    The turtle's left side faces the camera when its head points left in the photo."""
+    photo = answer.get("photo")
+    if photo == "side":
+        return {"left": "carapace_left", "right": "carapace_right"}.get(answer.get("head"), "carapace_side")
+    view = {"top": "carapace_top"}.get(photo, photo)
+    return view if view in VIEW_LABELS else ""
 # No response_schema: on a test photo, constraining output to a schema made
 # gemini-2.5-flash's box ~12% too tall; a plain JSON instruction was tight.
 
@@ -51,6 +82,7 @@ def make_client():
 
 
 def _ask_box(client, img: Image.Image, side: int, thinking_level: str):
+    """(box or None, view) from one Gemini call."""
     from google.genai import types
     small = img.copy()
     small.thumbnail((side, side))
@@ -68,24 +100,34 @@ def _ask_box(client, img: Image.Image, side: int, thinking_level: str):
     out = json.loads(resp.text)
     if isinstance(out, list):  # occasionally wrapped in a list
         out = out[0] if out else {}
+    view = view_of(out)
     box = out.get("box_2d") or []
     if not out.get("found") or len(box) != 4:
-        return None
+        return None, view
     y0, x0, y1, x1 = (max(0, min(1000, int(v))) for v in box)
     if y1 <= y0 or x1 <= x0:
-        return None
-    return [y0, x0, y1, x1]
+        return None, view
+    return [y0, x0, y1, x1], view
 
 
-def detect_box(client, img: Image.Image):
-    """Return [ymin, xmin, ymax, xmax] in 0..1000, or None if no shell found.
+def detect(client, img: Image.Image):
+    """(box, view): box is [ymin, xmin, ymax, xmax] in 0..1000 or None if no shell
+    found; view is a box-turtle-id image type or ''.
 
     Fast pass first (640px, minimal thinking). On the reference set that pass
     said "no shell" for 17/633 photos that all clearly showed one, so a miss is
     retried at full size with a little more thinking.
     """
-    return (_ask_box(client, img, DETECT_SIDE, "minimal")
-            or _ask_box(client, img, max(img.size), "low"))
+    box, view = _ask_box(client, img, DETECT_SIDE, "minimal")
+    if box is None:
+        box, view2 = _ask_box(client, img, max(img.size), "low")
+        view = view2 or view
+    return box, view
+
+
+def detect_box(client, img: Image.Image):
+    """Return [ymin, xmin, ymax, xmax] in 0..1000, or None if no shell found."""
+    return detect(client, img)[0]
 
 
 def crop_to_box(img: Image.Image, box, margin: float = MARGIN) -> Image.Image:
