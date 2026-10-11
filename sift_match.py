@@ -15,8 +15,8 @@ Improved after the SIFT study (analysis/SIFT_STUDY.md), same keypoints and cost:
 Full-set results (SIFT + embeddings, matching.fuse):
                                      old      new
   field photos, right first time    90.3%    96.0%   (176 known turtles)
-  different-day test, right first   85.2%    88.6%   (534 queries)
-  SIFT alone, different-day test    81.5%    87.6%
+  different-day test, right first   80.6%    84.3%   (515 queries, by encounter)
+  SIFT alone, different-day test    77.3%    83.1%
 
 Spot-score bands (the top turtle's score, new scale):
   >= 2.0  match         field: 127 known all right, no new turtles

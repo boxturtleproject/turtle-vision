@@ -8,17 +8,17 @@ side, and the field-test app shows it.
 
 ## Does the side matter for matching? Yes
 
-Different-day test (534 reference photos, RootSIFT + mutual matches;
+Different-day test (515 reference photos, RootSIFT + mutual matches;
 `side_matters.py`, `side_matters_results.txt`). Spot score of the right turtle:
 
 | right turtle's best photo is… | median spot score | reaches Match (≥ 2) |
 |---|---|---|
-| the same side as the query | 7.6 | 86% |
-| a different side | 1.0 | 29% |
+| the same side as the query | 7.2 | 81% |
+| a different side | 1.0 | 26% |
 
-When the right turtle wins, 85% of the time its best match is a photo of the same side.
-But matching against only same-side photos is worse (SIFT right first time 83.7% vs
-87.6% against every side): some turtles have no photo of that side on file, and other
+80% of the time the right turtle's best match is a photo of the same side. But matching
+against only same-side photos is worse (SIFT right first time 81.2% vs 83.1% against
+every side): some turtles have no photo of that side on file, and other
 sides still find them sometimes. So the app keeps comparing against everything and
 uses the side to explain and to guide:
 

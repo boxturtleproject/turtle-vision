@@ -1,0 +1,19 @@
+628 reference photos, 37 turtles
+
+all photos                     refs  628 (100%) | different-day (515): SIFT 0.831/0.872  +emb 0.843/0.920 | field (176 known): SIFT 0.909 +emb 0.960, new-turtle separation (AUC) 0.948
+all minus unsupported          refs  499 ( 79%) | different-day (515): SIFT 0.804/0.854  +emb 0.819/0.893 | field (176 known): SIFT 0.858 +emb 0.915, new-turtle separation (AUC) 0.937
+index: 1 per side              refs  111 ( 18%) | different-day (515): SIFT 0.794/0.831  +emb 0.819/0.887 | field (176 known): SIFT 0.807 +emb 0.824, new-turtle separation (AUC) 0.909
+index: 2 per side              refs  216 ( 34%) | different-day (515): SIFT 0.800/0.845  +emb 0.833/0.903 | field (176 known): SIFT 0.830 +emb 0.892, new-turtle separation (AUC) 0.944
+index: 3 per side              refs  284 ( 45%) | different-day (515): SIFT 0.802/0.849  +emb 0.841/0.911 | field (176 known): SIFT 0.835 +emb 0.892, new-turtle separation (AUC) 0.949
+index: 5 per side              refs  364 ( 58%) | different-day (515): SIFT 0.816/0.860  +emb 0.858/0.922 | field (176 known): SIFT 0.824 +emb 0.898, new-turtle separation (AUC) 0.942
+all minus unsupported: photos you flagged that are still used as references: ['634']
+index: 2 per side: photos you flagged that are still used as references: ['979']
+index: 3 per side: photos you flagged that are still used as references: ['634', '979', '980', '981']
+
+Two tiers: rank on every photo; a Match (spot >= 2) whose best reference no other sighting supports becomes Check
+  different-day  {'right Match kept': 317, 'right Match -> Check': 63, 'wrong Match kept': 5, 'wrong Match -> Check': 1}
+  field          {'right Match kept': 101, 'right Match -> Check': 26, 'wrong Match kept': 0, 'wrong Match -> Check': 0}
+
+Wrong Matches (spot >= 2) on the different-day test, with every photo vs without the confirmed-misfiled ones
+  every photo                  515 queries: SIFT 0.831, +emb 0.843; wrong Matches 6: ['721 Cruella -> Jigsaw (spot 2.8, via #583)', '720 Cruella -> Jigsaw (spot 4.2, via #971)', '719 Cruella -> Jigsaw (spot 8.9, via #749)', '718 Cruella -> Jigsaw (spot 14.1, via #706)', '975 Jigsaw -> Cruella (spot 13.2, via #718)', '201 Sunflower -> Flower (spot 4.2, via #435)']
+  confirmed problems removed   506 queries: SIFT 0.850, +emb 0.862; wrong Matches 0: []

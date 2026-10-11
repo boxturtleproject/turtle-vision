@@ -12,11 +12,11 @@ field: 318 photos (176 known, 142 new); logit = 5.26 * log(1+spot) + -4.49
 fitted curve: 0.5 -> 9%, 0.8 -> 20%, 1 -> 30%, 1.2 -> 41%, 1.5 -> 58%, 2 -> 78%, 2.5 -> 89%, 3 -> 94%, 4 -> 98%, 6 -> 100%
 
 reference test check (observed vs field-fitted):
- 0.0-0.8      389 photos  observed   2%  fitted  12%
- 0.8-1.0       95 photos  observed  11%  fitted  24%
- 1.0-1.2       52 photos  observed  21%  fitted  35%
- 1.2-1.5       12 photos  observed  50%  fitted  51%
- 1.5-2.0       18 photos  observed 100%  fitted  68%
- 2.0-3.0       34 photos  observed  97%  fitted  89%
- 3.0-5.0       50 photos  observed  98%  fitted  98%
- 5.0-         344 photos  observed  98%  fitted 100%
+ 0.0-0.8      405 photos  observed   2%  fitted  12%
+ 0.8-1.0       92 photos  observed  10%  fitted  24%
+ 1.0-1.2       43 photos  observed  26%  fitted  35%
+ 1.2-1.5       16 photos  observed  50%  fitted  50%
+ 1.5-2.0       18 photos  observed 100%  fitted  67%
+ 2.0-3.0       27 photos  observed  96%  fitted  89%
+ 3.0-5.0       66 photos  observed  97%  fitted  98%
+ 5.0-         293 photos  observed  99%  fitted 100%

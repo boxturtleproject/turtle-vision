@@ -7,6 +7,8 @@ favour the matcher's own top pick.
 On the different-day test (evaluate.py --gemini), re-ranking the combined
 matcher's top 5 with gemini-3.6-flash raised top-1 from 0.551 to 0.717
 (534 queries; fixed 115, broke 26; ~3.4s and ~9k input tokens per query).
+These figures predate grouping sightings by encounter (October 2026), which
+lowered every different-day number by a few points; not re-run.
 More thinking (medium) and gemini-3.1-pro-preview did not do better on a
 120-query sample. Choosing among the SIFT + embeddings top 5 instead
 (app.py's default) barely helps with shell-crop SIFT: 0.852 -> 0.863

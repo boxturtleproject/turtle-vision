@@ -176,7 +176,12 @@ def combine(S1, S2, kind, w2=1.0):
 
 
 def load(cfg, full=False):
-    return pickle.loads((CACHE / f"scores_{key(cfg)}{'' if full else '_s100'}.pkl").read_bytes())
+    S = pickle.loads((CACHE / f"scores_{key(cfg)}{'' if full else '_s100'}.pkl").read_bytes())
+    # keep only queries that still have another sighting of their turtle under the current
+    # groups (merging re-saved duplicate pictures leaves some photos with none)
+    keep = [k for k, q in enumerate(S["ref_q"]) if ((NAMES == NAMES[q]) & (GROUPS != GROUPS[q])).any()]
+    S["ref"], S["ref_q"] = [S["ref"][k] for k in keep], [S["ref_q"][k] for k in keep]
+    return S
 
 
 if __name__ == "__main__":

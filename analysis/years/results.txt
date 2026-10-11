@@ -1,0 +1,13 @@
+515 test photos; encounter years 2020-2025; 41 photos undated
+
+own turtle only through photos           photos   SIFT   +emb  top 5  Match (>=2)  wrong Match
+any other sighting                          497  84.5%  85.5%  93.0%        76.7%            6
+1+ year away                                395  81.8%  80.3%  88.6%        64.6%            6
+2+ years away                               295  79.3%  76.6%  85.4%        61.4%            8
+3+ years away                               192  66.7%  64.1%  77.6%        55.7%           12
+
+With the 10 confirmed problem photos left out:
+  any other sighting      483 photos  SIFT 87.4%  top 5 94.0%  Match 77.8%  wrong Match 0: []
+  1+ years away           389 photos  SIFT 83.8%  top 5 88.9%  Match 64.3%  wrong Match 0: []
+  2+ years away           289 photos  SIFT 82.4%  top 5 86.2%  Match 60.9%  wrong Match 0: []
+  3+ years away           190 photos  SIFT 72.1%  top 5 76.8%  Match 53.7%  wrong Match 0: []

@@ -195,8 +195,9 @@ def run(cfg, tag="", ransac_methods=("affine",), ransac_min=6, limit=None, sampl
     rfeat = features(ref["paths"], cfg, "ref")
     ffeat = features(fld["paths"], cfg, "field")
     out_f = CACHE / f"scores_{key(cfg)}{'_s100' if sample else ''}.pkl"
-    if out_f.exists():
-        return pickle.loads(out_f.read_bytes())
+    existing = pickle.loads(out_f.read_bytes()) if out_f.exists() else None
+    if existing is not None and sample:
+        return existing
     bank = RefBank(rfeat)
     names = ref["names"]
     classes = sorted(set(names))
@@ -273,6 +274,20 @@ def run(cfg, tag="", ransac_methods=("affine",), ransac_min=6, limit=None, sampl
     has_other = (same_turtle & ~same_group).any(1)
     ref_q = np.where(has_other)[0][:limit] if limit else np.where(has_other)[0]
     field_idx = np.arange(len(ffeat))[: limit or None]
+    if existing is not None:
+        # top up: score only reference queries the current sighting groups add (lnbnn
+        # exclusions of earlier rows keep the groups they were computed with)
+        have = set(int(q) for q in existing["ref_q"])
+        missing = [int(i) for i in ref_q if int(i) not in have]
+        if not missing:
+            return existing
+        print(f"  topping up {len(missing)} new reference queries", flush=True)
+        for i in missing:
+            existing["ref"].append(one(rfeat[i], {"grp": same_group[i], "tur": same_turtle[i]}))
+        existing["ref_q"] = np.concatenate([np.asarray(existing["ref_q"]), np.array(missing)])
+        out_f.write_bytes(pickle.dumps(existing))
+        print(f"done {cfg} in {time.time() - t0:.0f}s", flush=True)
+        return existing
     if sample:  # fixed screening sample: 50 reference queries + 30 known and 20 new field photos
         rng = np.random.default_rng(0)
         ref_q = np.sort(rng.choice(np.where(has_other)[0], 50, replace=False))

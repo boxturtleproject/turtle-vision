@@ -3,7 +3,7 @@
 **Result:** two changes to how SIFT matches are counted — *RootSIFT* descriptors and
 *mutual* matches at ratio 0.8 — raise SIFT + embeddings from **90.3% to 96.0%** right
 first time on the 176 verified known field photos (15 photos fixed, none broken), and
-from **85.2% to 88.6%** on the different-day reference test. The spot score also
+from **80.6% to 84.3%** on the different-day reference test. The spot score also
 separates new turtles from known ones far better. Same keypoints, same speed, and
 box-turtle-id's stored descriptors can be reused (RootSIFT is computed from them).
 
@@ -21,13 +21,21 @@ counted in both directions, the larger count taken; score = count / fewer keypoi
 
 Every variant was scored against all 628 reference crops on two sets:
 
-- **Different-day test** — 534 reference photos, each matched only against *other days*
-  of its turtle (duplicate photos merged), as in `evaluate.py`.
+- **Different-day test** — 515 reference photos, each matched only against *other
+  encounters* of its turtle, as in `evaluate.py`. *Corrected October 11:* the first
+  version grouped photos by the date in their filenames, which turned out to be mostly the
+  day a photo was edited: the photos come from encounters in 2020–2025, yet nearly all
+  carry 2025 filename dates. Some encounters were split into "different days", and 45
+  pictures stored twice as re-saved copies let photos match their own copy. The
+  [label audit](audit/README.md) found both. Sightings are now grouped by encounter date
+  from box-turtle-id, with duplicate pictures merged (`data/duplicate_pictures.csv`), and
+  every different-day number here is the corrected one. The first version reported 534
+  photos and 85.2% → 88.6%. The field-photo numbers were never affected.
 - **Field photos** — the 318 hand-verified photos from the October field test
   (176 known turtles, 142 new), as in `FIELD_TEST.md`.
 
 A fixed 100-photo sample (50 reference, 30 known + 20 new field) screened ideas in ~2
-minutes each (`screen_results.txt`); the finalists were run on everything
+minutes each (`screen_results.txt`, run with the first grouping); the finalists were run on everything
 (`final_results.txt`). Matching ran on the GPU (`lab_sift.py`), checked to reproduce the
 production scores exactly; today's matcher reproduces the field test's 90.3% / 96.6%.
 
@@ -39,7 +47,7 @@ production scores exactly; today's matcher reproduces the field test's 90.3% / 9
 | looser ratio without mutual check | 0.75 / 0.8 | worse: lets in junk |
 | ratio 0.85 / 0.9 with mutual check | | worse than 0.8 |
 | position check (RANSAC) | keep pairs consistent with one homography / affine warp | no gain on top of mutual matches (a domed shell from different angles fits a flat warp poorly) |
-| LNBNN (HotSpotter's one-vs-many scoring) | each descriptor votes for turtles closer than the crowd | best on the reference test (94.4%) but not on field photos; weaker new-turtle separation |
+| LNBNN (HotSpotter's one-vs-many scoring) | each descriptor votes for turtles closer than the crowd | best on the reference test (90%; its votes were computed with the first grouping, so likely a little high) but not on field photos; weaker new-turtle separation |
 | yellow channel (Lab b*) | SIFT on the yellow–blue axis instead of grey | better on reference photos, worse on field photos (~5% of known turtles named wrong) |
 | CLAHE contrast | evens out sun and shade | worse |
 | 400px instead of 250px | | no better, 4× slower |
@@ -53,9 +61,9 @@ SIFT + embeddings fused as before (`log(1 + best spot) + best embedding similari
 |---|---|---|
 | field, right first time (176) | 90.3% | **96.0%** |
 | field, in top 5 | 96.6% | **98.3%** |
-| different-day, right first time (534) | 85.2% | **88.6%** |
-| different-day, in top 5 | 92.5% | **94.6%** |
-| SIFT alone, different-day right first time | 81.6% | 87.6% |
+| different-day, right first time (515) | 80.6% | **84.3%** |
+| different-day, in top 5 | 89.5% | **92.0%** |
+| SIFT alone, different-day right first time | 77.3% | 83.1% |
 | SIFT alone, field right first time | 79.5% | 90.9% |
 | known vs new separation (AUC, field) | 0.88 | 0.95 |
 
@@ -89,12 +97,12 @@ table is more honest than a fitted formula:
 | spot | field: top pick right | reference test |
 |---|---|---|
 | < 0.8 | 6% | 2% |
-| 0.8–1.0 | 18% | 11% |
-| 1.0–1.2 | 40% | 21% |
+| 0.8–1.0 | 18% | 10% |
+| 1.0–1.2 | 40% | 26% |
 | 1.2–1.5 | 44% | 50% |
 | 1.5–2.0 | 100% (18/18) | 100% (18/18) |
-| 2.0–3.0 | 100% | 97% |
-| 3+ | 100% | 98% |
+| 2.0–3.0 | 100% | 96% |
+| 3+ | 100% | 97–99% |
 
 The low-score rows depend on how many submissions are new turtles (45% in this field
 set); the high-score rows barely do.
@@ -105,13 +113,36 @@ Both apps show it next to the spot score, rounded and capped at 98%
 2–3 ~97%, 3+ ~98%. Refit it from confirmed submissions; the review page lists the
 shown % beside how confirmed photos turned out.
 
-## Data finding: Jigsaw = Cruella, Flower = Sunflower?
+## Recognising a turtle years later
+
+With encounter dates, the reference set spans 2020–2025, so the test can ask how well a
+turtle is found when the only photos of it on file are years old
+([`years/`](years/results.txt)). With the 10 confirmed problem photos left out:
+
+| own turtle's photos on file | test photos | SIFT right first time | right turtle in top 5 | Match (spot ≥ 2) | wrong Match |
+|---|---|---|---|---|---|
+| any other encounter | 483 | 87.4% | 94.0% | 77.8% | 0 |
+| 1+ year away | 389 | 83.8% | 88.9% | 64.3% | 0 |
+| 2+ years away | 289 | 82.4% | 86.2% | 60.9% | 0 |
+| 3+ years away | 190 | 72.1% | 76.8% | 53.7% | 0 |
+
+A long gap makes the matcher less sure, never confidently wrong: more returning turtles
+land in Check or Possibly new. So the risk at sites with old archives is a returning
+turtle being registered as new, and fresh photos each season keep matching strong.
+
+## Data finding: misfiled photos, not duplicate turtles
 
 In the reference test with each photo's own turtle removed, the only photos that still
 reached the Match band were Jigsaw ↔ Cruella (34) and Flower ↔ Sunflower (9)
-(`duplicates_results.txt`). Many *different* photos of Jigsaw and Cruella match each other
-strongly, not just the known shared photo (#719 = #801), so they are very likely the same
-turtle. Worth checking in box-turtle-id.
+(`duplicates_results.txt`). This first read as "same turtle", which was wrong: the four
+are different turtles (confirmed by the field team). Checked photo by photo
+([label audit](audit/README.md)), every one of those hits goes through a few misfiled
+photos: the four photos of one Cruella encounter (July 3, 2022, the day both turtles were
+seen: left, right, front, site view) are Jigsaw, and one Sunflower top photo is the same
+picture as a Flower photo. Confirmed by the field team on October 11. The lesson: a single misfiled reference
+photo is enough to make the matcher name the wrong turtle, so check flags per photo.
+Matching only against a few "index" photos per turtle does not fix this and costs accuracy;
+leaving out the few bad photos does ([`index_images/`](index_images/README.md)).
 
 ## Reproduce
 

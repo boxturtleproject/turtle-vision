@@ -17,7 +17,7 @@ turtles. Full write-up: [`analysis/FIELD_TEST.md`](analysis/FIELD_TEST.md).
 
 **SIFT study (same photos):** counting only *mutual* matches of *RootSIFT*
 descriptors lifts SIFT + embeddings to **96% right first time** (98% top 5)
-on those field photos and 0.886 on the different-day test, with much cleaner
+on those field photos and 0.843 on the different-day test, with much cleaner
 new-turtle separation. `sift_match.py` now uses it; spot-score bands are
 Match ≥ 2, Check 1.2–2, Possibly new below, and each spot score is shown
 with how often the top pick was right at that score ("~95% likely"). Write-up:
@@ -40,28 +40,39 @@ See [`predictions_pca.csv`](data/predictions_pca.csv) for per-image predictions.
 The split above is per photo, so a test photo can match a photo of the same
 turtle taken minutes earlier, with the same background and light. That
 inflates scores. `evaluate.py` scores every photo only against *other
-sightings* of its turtle (534 queries; dates from `fetch_meta.py`), which is
-what a new sighting looks like. Photos that box-turtle-id holds twice under
-different dates (66 sets of byte-identical files, plus repeated original
-filenames) are merged into one sighting, so a photo never matches its own
-copy.
+encounters* of its turtle (515 queries), which is what a new sighting looks
+like. Sightings are grouped by the encounter date in box-turtle-id
+(`fetch_meta.py`), not by filename dates, which are mostly the day a photo was
+edited: the reference photos come from 2020–2025 encounters but nearly all carry
+2025 filenames. Pictures stored twice (byte-identical files, repeated original
+filenames, and re-saved copies found by `analysis/audit/`) are merged into one
+sighting, so a photo never matches its own copy.
+
+*Corrected October 11, 2026:* earlier versions grouped by filename date and
+reported 534 queries, with every figure here 3–8 points higher (the embedding
+matchers most). Rows marked † were measured that way and not re-run.
 
 | matcher | top-1 | top-5 |
 |---|---:|---:|
-| whole photo, PCA | 0.388 | 0.684 |
-| shell crop, PCA | 0.395 | 0.682 |
-| tight crop, PCA | 0.440 | 0.740 |
-| tight crop, LDA | 0.489 | 0.796 |
-| combined: crop + tight, LDA | 0.551 | 0.839 |
-| combined top 5, re-ranked by Gemini (`rerank.py`) | 0.717 | 0.839 |
-| SIFT spot match, whole photo, same view (box-turtle-id as deployed) | 0.790 | 0.841 |
-| SIFT spot match, whole photo, any view | 0.788 | 0.867 |
-| SIFT spot match on the shell crop, any view (box-turtle-id's scoring) | 0.815 | 0.878 |
-| SIFT + combined embeddings, box-turtle-id's scoring | 0.852 | 0.925 |
-| SIFT on the shell crop, RootSIFT + mutual matches (`sift_match.py`) | 0.876 | 0.914 |
-| **SIFT (RootSIFT + mutual) + combined embeddings** (`matching.fuse`) | **0.886** | **0.946** |
+| whole photo, PCA | 0.307 | 0.614 |
+| shell crop, PCA | 0.282 | 0.623 |
+| tight crop, PCA | 0.357 | 0.713 |
+| tight crop, LDA | 0.419 | 0.823 |
+| combined: crop + tight, LDA | 0.476 | 0.817 |
+| combined top 5, re-ranked by Gemini (`rerank.py`) † | 0.717 | 0.839 |
+| SIFT spot match, whole photo, same view (box-turtle-id as deployed) † | 0.790 | 0.841 |
+| SIFT spot match, whole photo, any view † | 0.788 | 0.867 |
+| SIFT spot match on the shell crop, any view (box-turtle-id's scoring) | 0.773 | 0.837 |
+| SIFT + combined embeddings, box-turtle-id's scoring | 0.806 | 0.895 |
+| SIFT on the shell crop, RootSIFT + mutual matches (`sift_match.py`) | 0.831 | 0.872 |
+| **SIFT (RootSIFT + mutual) + combined embeddings** (`matching.fuse`) | **0.843** | **0.920** |
 
-Gemini choosing among the SIFT + embeddings top 5 adds little: 0.852 → 0.863
+How long-ago photos affect this, and why a few misfiled photos matter more than
+anything else: [`analysis/years/`](analysis/years/README.md),
+[`analysis/audit/`](analysis/audit/README.md),
+[`analysis/index_images/`](analysis/index_images/README.md).
+
+Gemini choosing among the SIFT + embeddings top 5 added little † : 0.852 → 0.863
 top-1 (fixed 24, broke 18), within noise for ~3.5s and an API call per photo.
 With whole-photo SIFT, where the fused top-1 starts lower, it helped more
 (0.837 → 0.867); choosing among SIFT's own top 5 gave 0.835. The app shows it
@@ -340,7 +351,7 @@ Upload a photo, or several photos of one turtle (top, left and right of the
 shell), from a laptop or a phone on the same Wi-Fi. Several photos are
 matched in parallel and combined into one answer by adding up each turtle's
 SIFT + embeddings score across them: on the different-day test, a whole
-sighting got 0.93 top-1 against 0.85 for one photo (0.97 with 4+ photos).
+sighting got 0.92 top-1 against 0.84 for one photo (98 encounters with 2+ photos).
 The result shows **All photos combined** first, then each photo's own best
 guess. For a single photo, matchers are side by side, best first:
 
