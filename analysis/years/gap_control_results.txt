@@ -1,0 +1,14 @@
+Each top/left/right photo matched against ONE other encounter of its turtle that has a photo of the same side
+gap between the two encounters   comparisons  found first  median spot score
+under 1 year                            1115        81.2%                3.4
+1-2 years                                558        76.9%                2.7
+2-3 years                                351        83.5%                3.3
+3+ years                                 291        85.9%                3.1
+
+Shell features per photo by encounter year (top/left/right photos):
+  2020:   7 photos, median 909 spot features
+  2021:   8 photos, median 911 spot features
+  2022:  72 photos, median 918 spot features
+  2023:  84 photos, median 913 spot features
+  2024:  99 photos, median 839 spot features
+  2025: 131 photos, median 866 spot features
