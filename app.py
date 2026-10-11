@@ -2,8 +2,8 @@
 
 Upload a carapace photo, or several photos of one turtle (top/left/right),
 from a laptop or a phone on the same Wi-Fi. Several photos are combined into
-one answer (each turtle's fused score added up across photos; 0.93 top-1 vs
-0.85 for one photo on the different-day test), shown before each photo's own
+one answer (each turtle's fused score added up across photos; 0.92 top-1 vs
+0.84 for one photo on the different-day test), shown before each photo's own
 best guess. A single photo shows these matchers side by side:
 
   best     — SIFT + combined embeddings: each turtle scored by
@@ -16,16 +16,16 @@ best guess. A single photo shows these matchers side by side:
              of the turtle the photo shows (shellcrop.view_of); it's shown
              under the photo and saved to results/photo_views.csv.
   sift     — SIFT spot matcher on the shell crop against every reference
-             crop: mutual RootSIFT matches (sift_match.py). ~88% top-1 on the
+             crop: mutual RootSIFT matches (sift_match.py). ~83% top-1 on the
              different-day test.
   gemini   — second opinion: Gemini choosing among the best-guess top 5 by
              comparing the shell photos (rerank.py), with a one-line reason.
-             On the different-day test it barely helps (0.852 -> 0.863 top-1;
-             fixed 24, broke 18). Falls back to the combined top 5 without
+             On an earlier version of the different-day test it barely helped
+             (0.852 -> 0.863 top-1; fixed 24, broke 18). Falls back to the combined top 5 without
              SIFT. Adds ~3.5s per upload; --no-gemini to skip.
   combined — crop + tight embeddings, each projected with LDA (learned from
              turtle names), similarities averaged. Best embedding matcher on
-             the different-day test (evaluate.py): ~55% top-1, ~84% top-5.
+             the different-day test (evaluate.py): ~48% top-1, ~82% top-5.
   full     — embed the whole photo, PCA -> 128
   crop     — crop to the shell with a Gemini bounding box (+5% margin), PCA
   tight    — same box, keep only its central 71% (all shell), PCA
@@ -481,7 +481,7 @@ def build_app(matchers: dict, use_gemini: bool = True, sift=None) -> FastAPI:
 
         Several photos are matched in parallel and combined by adding up each
         turtle's fused score across them; on the different-day test that took
-        top-1 from 0.85 (one photo) to 0.93 (whole sighting).
+        top-1 from 0.84 (one photo) to 0.92 (whole sighting).
         """
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-")
         jobs = [(f.file.read(), f.filename, stamp + uuid.uuid4().hex[:6], gemini != "0", require_shell == "1")
@@ -1093,25 +1093,25 @@ const DESC = {
              'Field test: 31 of 31 turtles with 2+ photos named right'],
   best:     ['Uses: SIFT + embeddings, shell crop',
              'Your shell crop is compared with all 628 reference photos two ways: SIFT spot matching and image embeddings. The two scores are added per turtle. Spot score 2+ = match, 1.2\u20132 = check, under 1.2 = possibly new.',
-             'Tested: 89% first time, 95% in top 5 (field photos: 96%, 98%)'],
+             'Tested: 84% first time, 92% in top 5 (field photos: 96%, 98%)'],
   gemini:   ['Uses: Gemini (AI vision), choosing from the SIFT + embeddings top 5',
              'Gemini sees your photo and 3 reference photos of each of those 5 turtles and picks the same shell pattern. It cannot bring in a turtle outside those 5, and it always picks someone, even for a new turtle.',
-             'Tested: 86% first time'],
+             'Earlier test: no better than SIFT + embeddings'],
   sift:     ['Uses: SIFT only (RootSIFT, mutual matches), shell crop',
              'Finds small distinctive spots on your shell crop and counts the ones that pick each other as best match in a reference shell crop. Score = matched spots per 100. 2+ = match; under 1.2 = possibly new.',
-             'Tested: 88% first time, 91% in top 5'],
+             'Tested: 83% first time, 87% in top 5'],
   combined: ['Uses: embeddings only (no SIFT), shell crop + tight crop',
              'Google image embeddings of both crops, tuned with turtle names (LDA) and averaged. Number = similarity, 0 to 1. Judges overall look, not specific spots.',
-             'Tested: 55% first time, 84% in top 5'],
+             'Tested: 48% first time, 82% in top 5'],
   full:     ['Uses: embeddings only (no SIFT), whole photo',
              'Google image embedding of the uncropped photo, background and hands included. Number = similarity, 0 to 1.',
-             'Tested: 39% first time, 68% in top 5'],
+             'Tested: 31% first time, 61% in top 5'],
   crop:     ['Uses: embeddings only (no SIFT), shell crop',
              'Google image embedding of the shell crop (Gemini\u2019s box + 5% margin). Number = similarity, 0 to 1.',
-             'Tested: 40% first time, 68% in top 5'],
+             'Tested: 28% first time, 62% in top 5'],
   tight:    ['Uses: embeddings only (no SIFT), tight crop',
              'Google image embedding of the centre 71% of the shell box: all shell, edge plates cut off. Number = similarity, 0 to 1.',
-             'Tested: 44% first time, 74% in top 5'],
+             'Tested: 36% first time, 71% in top 5'],
 };
 const descOf = m => DESC[m] || (m.startsWith('photo')
   ? ['Uses: SIFT + embeddings, this photo alone', 'The same method as the SIFT + embeddings column, run on just this one photo.', ''] : ['', '', '']);

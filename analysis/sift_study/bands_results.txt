@@ -1,28 +1,28 @@
 
 match >= 1.5, check 1.0-1.5, possibly new < 1.0
-  match         field: known 145 (right 145) new   0 | ref: known 446 (right 438) as-new  43
-  check         field: known  10 (right  10) new  14 | ref: known  26 (right  17) as-new  41
-  possibly new  field: known  21 (right  14) new 128 | ref: known  62 (right  18) as-new 450
+  match         field: known 145 (right 145) new   0 | ref: known 404 (right 398) as-new  43
+  check         field: known  10 (right  10) new  14 | ref: known  29 (right  19) as-new  33
+  possibly new  field: known  21 (right  14) new 128 | ref: known  82 (right  17) as-new 439
 
 match >= 1.5, check 1.1-1.5, possibly new < 1.1
-  match         field: known 145 (right 145) new   0 | ref: known 446 (right 438) as-new  43
-  check         field: known   7 (right   7) new   8 | ref: known  17 (right  12) as-new  16
-  possibly new  field: known  24 (right  17) new 134 | ref: known  71 (right  23) as-new 475
+  match         field: known 145 (right 145) new   0 | ref: known 404 (right 398) as-new  43
+  check         field: known   7 (right   7) new   8 | ref: known  20 (right  14) as-new  14
+  possibly new  field: known  24 (right  17) new 134 | ref: known  91 (right  22) as-new 458
 
 match >= 1.6, check 1.1-1.6, possibly new < 1.1
-  match         field: known 144 (right 144) new   0 | ref: known 442 (right 434) as-new  40
-  check         field: known   8 (right   8) new   8 | ref: known  21 (right  16) as-new  19
-  possibly new  field: known  24 (right  17) new 134 | ref: known  71 (right  23) as-new 475
+  match         field: known 144 (right 144) new   0 | ref: known 400 (right 394) as-new  40
+  check         field: known   8 (right   8) new   8 | ref: known  24 (right  18) as-new  17
+  possibly new  field: known  24 (right  17) new 134 | ref: known  91 (right  22) as-new 458
 
 match >= 2.0, check 1.2-2.0, possibly new < 1.2
-  match         field: known 127 (right 127) new   0 | ref: known 428 (right 420) as-new  37
-  check         field: known  22 (right  22) new   5 | ref: known  26 (right  24) as-new  10
-  possibly new  field: known  27 (right  20) new 137 | ref: known  80 (right  29) as-new 487
+  match         field: known 127 (right 127) new   0 | ref: known 386 (right 380) as-new  37
+  check         field: known  22 (right  22) new   5 | ref: known  29 (right  26) as-new  11
+  possibly new  field: known  27 (right  20) new 137 | ref: known 100 (right  28) as-new 467
 
 match >= 2.0, check 1.0-2.0, possibly new < 1.0
-  match         field: known 127 (right 127) new   0 | ref: known 428 (right 420) as-new  37
-  check         field: known  28 (right  28) new  14 | ref: known  44 (right  35) as-new  47
-  possibly new  field: known  21 (right  14) new 128 | ref: known  62 (right  18) as-new 450
+  match         field: known 127 (right 127) new   0 | ref: known 386 (right 380) as-new  37
+  check         field: known  28 (right  28) new  14 | ref: known  47 (right  37) as-new  39
+  possibly new  field: known  21 (right  14) new 128 | ref: known  82 (right  17) as-new 439
 
 encounters 2+ photos: 31/31 right; best spot per encounter: [np.float64(1.8), np.float64(2.82), np.float64(3.0), np.float64(3.74), np.float64(3.86), np.float64(4.08), np.float64(4.43), np.float64(4.54)]
   new turtle, best of 2 photos >= 1.0: 18.6%  (single photo 9.9%)

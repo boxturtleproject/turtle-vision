@@ -6,6 +6,7 @@ FIELD: the verified field photos' shell crops (uploads/<uid>_crop.jpg), known + 
        with embedding similarities to every reference (projection fit on all refs).
 """
 import csv
+import hashlib
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -31,7 +32,8 @@ def load_ref():
     assert out["tight"][1] == ids
     groups = matching.turtle_day_groups(ids, names)
     crops = [TV / "data" / shellcrop.VARIANTS["crop"]["dir"] / n / f"{c}.jpg" for n, c in zip(names, ids)]
-    f = CACHE / "ref_emb_oof.npy"
+    # out-of-fold folds follow the sighting groups, so the cache is keyed on them
+    f = CACHE / f"ref_emb_oof_{hashlib.sha1(' '.join(groups).encode()).hexdigest()[:10]}.npy"
     if f.exists():
         S = np.load(f)
     else:

@@ -41,27 +41,34 @@ def fit_projection(X, names, pca_dim=128, lda=False):
     return lambda Z: unit(l.transform(pca.transform(Z)))
 
 
-def capture_days(capture_ids):
-    """capture_id -> 'YYYY-MM-DD' from data/capture_meta.csv (fetch_meta.py); '' if unknown."""
+def capture_meta(capture_ids):
+    """capture_id -> its row of data/capture_meta.csv (fetch_meta.py); {} if unknown."""
     if not META.exists():
-        return {c: "" for c in capture_ids}
-    meta = {int(r["capture_id"]): r["captured_date"] for r in csv.DictReader(META.open())}
-    return {c: meta.get(c, "") for c in capture_ids}
+        return {c: {} for c in capture_ids}
+    meta = {int(r["capture_id"]): r for r in csv.DictReader(META.open())}
+    return {c: meta.get(c, {}) for c in capture_ids}
 
 
 def turtle_day_groups(capture_ids, names):
-    """Group id per photo: one sighting = same turtle + same day.
+    """Group id per photo: one sighting = same turtle + same encounter date.
 
-    box-turtle-id holds some photos twice under different dates (byte-identical
-    image files, or the same original filename on two captures). Those are
-    merged into one group so a photo can never count as its own "other day".
-    Undated photos are their own group.
+    Photos in an encounter use the encounter's date from box-turtle-id. Filename
+    dates are often the day a photo was edited, not taken: photos from 2020-2025
+    encounters mostly carry 2025 filename dates, and one encounter's photos can
+    carry several. So filename dates are used only for photos on a turtle's own
+    record (no encounter): such a photo joins every photo of its turtle with the
+    same filename date, which over-merges rather than risk a photo being scored
+    against its own sighting.
+
+    box-turtle-id also holds some pictures twice: byte-identical image files, the
+    same original filename on two captures, or the same picture re-saved under
+    another name (data/duplicate_pictures.csv, found by analysis/audit/label_audit.py).
+    Those are merged too, so a photo can never count as its own "other day".
+    Photos with no date at all are their own group.
     """
-    days = capture_days(capture_ids)
-    meta = {}
-    if META.exists():
-        meta = {int(r["capture_id"]): r["original_filename"] for r in csv.DictReader(META.open())}
+    meta = capture_meta(capture_ids)
     parent = list(range(len(capture_ids)))
+    index = {c: i for i, c in enumerate(capture_ids)}
 
     def find(i):
         while parent[i] != i:
@@ -80,10 +87,33 @@ def turtle_day_groups(capture_ids, names):
             else:
                 first[k] = i
 
-    union_by(lambda c, n: (n, days[c]) if days[c] else None)
-    union_by(lambda c, n: (n, meta[c]) if meta.get(c) else None)
+    enc_day = lambda c: meta[c].get("encounter_date", "")
+    file_day = lambda c: meta[c].get("captured_date", "")
+    union_by(lambda c, n: (n, "encounter", enc_day(c)) if enc_day(c) else None)
+    by_file_day = {}
+    for i, (c, n) in enumerate(zip(capture_ids, names)):
+        if file_day(c):
+            by_file_day.setdefault((n, file_day(c)), []).append(i)
+    for i, (c, n) in enumerate(zip(capture_ids, names)):  # photos on the turtle's own record
+        if not meta[c].get("encounter_id") and file_day(c):
+            for j in by_file_day[(n, file_day(c))]:
+                parent[find(j)] = find(i)
+    union_by(lambda c, n: (n, meta[c]["original_filename"]) if meta[c].get("original_filename") else None)
     union_by(lambda c, n: _file_hash(n, c))
+    for a, b in duplicate_pictures():  # re-saved copies (not byte-identical), from analysis/audit
+        if a in index and b in index:
+            parent[find(index[b])] = find(index[a])
     return np.array([f"{names[find(i)]}|{capture_ids[find(i)]}" for i in range(len(capture_ids))])
+
+
+DUPLICATES = DATA / "duplicate_pictures.csv"
+
+
+def duplicate_pictures():
+    """(capture_id, capture_id) pairs that are the same picture saved twice."""
+    if not DUPLICATES.exists():
+        return []
+    return [(int(r["capture_id_a"]), int(r["capture_id_b"])) for r in csv.DictReader(DUPLICATES.open())]
 
 
 def _file_hash(name, capture_id):
@@ -153,10 +183,11 @@ def fuse(sift_scores, emb_sims, cidx, n_classes, weight=1.0):
     """Per-turtle score: log(1 + best SIFT score) + weight * best embedding similarity.
 
     SIFT is decisive when spots match; the embedding similarity breaks ties
-    when SIFT finds little. On the different-day test this beat either alone
-    (shell-crop SIFT: 0.852 top-1 vs 0.815 SIFT alone, 0.551 embeddings;
-    whole-photo SIFT: 0.837);
-    weights 0.5-4 all landed within 0.835-0.861. Rank fusion was worse.
+    when SIFT finds little. On the different-day test this beats either alone
+    (RootSIFT + mutual matches: 0.843 top-1 vs 0.831 SIFT alone, 0.476
+    embeddings; 515 queries grouped by encounter). Earlier measurements, with
+    sightings grouped by filename date: weights 0.5-4 all landed within
+    0.835-0.861; rank fusion was worse.
     """
     s = np.zeros(n_classes)
     np.maximum.at(s, cidx, np.where(np.isfinite(sift_scores), sift_scores, 0))

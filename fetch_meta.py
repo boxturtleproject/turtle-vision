@@ -4,7 +4,10 @@ Walks box-turtle-id's public GET /api/turtles/{id} (the list endpoint is
 admin-gated) until a run of 404s, and keeps captures that appear in
 data/classifications.csv. The date is the app's captured_date, else parsed
 from the original filename ("2025-05-21 19.03.35.jpg"); the view is the app's
-image_type (carapace_top, carapace_left, front, plastron, …).
+image_type (carapace_top, carapace_left, front, plastron, …). encounter_id and
+encounter_date come from the turtle's encounters (empty for photos on the
+turtle's own record). Filename dates can be the date a photo was edited, not
+taken, so sightings are grouped by encounter (matching.turtle_day_groups).
 
 evaluate.py and app.py use the dates to score and calibrate on photos from
 *other days* of the same turtle, which is what a new sighting looks like.
@@ -43,6 +46,7 @@ def main():
             misses += 1
             continue
         misses = 0
+        enc_date = {e["id"]: (e.get("encounter_date") or "")[:10] for e in turtle.get("encounters") or []}
         for c in turtle["captures"]:
             if c["id"] not in wanted:
                 continue
@@ -50,9 +54,12 @@ def main():
             meta[c["id"]] = {"capture_id": c["id"], "app_turtle_id": tid,
                              "view": c.get("image_type") or "",
                              "captured_date": c.get("captured_date") or (m.group(1) if m else ""),
-                             "original_filename": c.get("original_filename") or ""}
+                             "original_filename": c.get("original_filename") or "",
+                             "encounter_id": c.get("encounter_id") or "",
+                             "encounter_date": enc_date.get(c.get("encounter_id"), "")}
     with OUT.open("w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["capture_id", "app_turtle_id", "view", "captured_date", "original_filename"])
+        w = csv.DictWriter(f, fieldnames=["capture_id", "app_turtle_id", "view", "captured_date", "original_filename",
+                                          "encounter_id", "encounter_date"])
         w.writeheader()
         w.writerows(meta[k] for k in sorted(meta))
     dated = sum(bool(m["captured_date"]) for m in meta.values())
