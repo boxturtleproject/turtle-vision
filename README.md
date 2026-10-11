@@ -347,6 +347,13 @@ a lookup table measured on the field photos (`LIKELY`; 1.2–1.5 shows ~45%,
 `python evaluate.py --sift` re-runs its different-day test.
 
 ### `app.py` — field-test web app
+Photos listed in `data/held_out.csv` are kept out of the app's reference set: photos
+the field team confirmed as misfiled or unusable, and placeholder drawings attached as
+photos (115 entries; 618 of 628 reference photos remain). It is a blacklist, not a
+whitelist: [`analysis/index_images/`](analysis/index_images/README.md) shows matching
+against a few "index" photos per turtle costs accuracy, while leaving out the confirmed
+problem photos removes every wrong Match. The accuracy tests keep the full labelled set.
+
 Upload a photo, or several photos of one turtle (top, left and right of the
 shell), from a laptop or a phone on the same Wi-Fi. Several photos are
 matched in parallel and combined into one answer by adding up each turtle's
