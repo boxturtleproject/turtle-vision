@@ -1,0 +1,23 @@
+
+every photo
+  one photo at a time: 84.3% (515 photos)
+  sum (app today)                         93.9% of 99 encounters  | 2 photos 100% (12)  3 photos 94% (33)  4+ photos 93% (54)
+  sum, top/left/right only                93.9% of 99 encounters  | 2 photos 100% (12)  3 photos 94% (33)  4+ photos 93% (54)
+  best spot score + mean embedding        92.9% of 99 encounters  | 2 photos 100% (12)  3 photos 97% (33)  4+ photos 89% (54)
+  sum of spot evidence + best embedding   93.9% of 99 encounters  | 2 photos 100% (12)  3 photos 94% (33)  4+ photos 93% (54)
+  vote (each photo's top pick)            93.9% of 99 encounters  | 2 photos 100% (12)  3 photos 97% (33)  4+ photos 91% (54)
+
+10 confirmed problem photos removed (as test photos and as references)
+  one photo at a time: 86.2% (506 photos)
+  sum (app today)                         94.9% of 98 encounters  | 2 photos 100% (13)  3 photos 97% (31)  4+ photos 93% (54)
+  sum, top/left/right only                94.9% of 98 encounters  | 2 photos 100% (13)  3 photos 97% (31)  4+ photos 93% (54)
+  best spot score + mean embedding        95.9% of 98 encounters  | 2 photos 100% (13)  3 photos 100% (31)  4+ photos 93% (54)
+  sum of spot evidence + best embedding   94.9% of 98 encounters  | 2 photos 100% (13)  3 photos 97% (31)  4+ photos 93% (54)
+  vote (each photo's top pick)            94.9% of 98 encounters  | 2 photos 100% (13)  3 photos 100% (31)  4+ photos 91% (54)
+
+Encounters still wrong (problem photos removed, photos added up):
+  Bubbles 2023-07-03 -> D.E.P.
+  Flower_2  -> Cruella
+  Strobe  -> Compass
+  T039_70      encounter 2023-06-03 10 photos (front,front,left,left,plastron,plastron,right,right,top,top) -> Cruella (spot 1.3); right turtle ranked 18, best spot 0.5; nearest other encounter 0.1 years away; 1 other encounters
+  T039_70      encounter 2023-04-15 4 photos (back,front,left,right) -> T117 (spot 1.3); right turtle ranked 5, best spot 0.5; nearest other encounter 0.1 years away; 1 other encounters

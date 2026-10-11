@@ -25,3 +25,15 @@ With the 10 photos the October audit confirmed as misfiled or unusable left out:
 
 The embedding projection (LDA) is fitted with the query's own encounter held out but other
 encounters of the turtle kept, so the SIFT column is the cleaner measure of long gaps.
+
+## Whole encounters (`encounters_test.py`, `encounters_results.txt`)
+
+Adding up an encounter's photos (what the app does) takes the different-day test from
+84.3% right first time for one photo to **93.9%** for a whole encounter (99 encounters
+with 2+ photos; 94.9% with the confirmed problem photos removed): about two thirds of the
+errors go. Other ways of combining (only top/left/right, best spot score + mean
+embedding, one vote per photo) land within a point. The encounters that still fail have
+nothing good to match against: Bubbles' only other encounter is a different turtle
+(confirmed in the audit), Flower_2's two encounters are five years apart, Strobe has a
+single encounter, and T039_70's April 2023 photos show a shell caked in dried mud.
+More photos of the query can't make up for missing or unusable reference photos.
