@@ -1,0 +1,21 @@
+1000 photos, 0 to ask
+
+minimal thinking. view right: 664/996 (66.7%), 'side' for a left/right photo: 148, wrong: 184; errors 4
+
+by recorded view (right / photos, and what Gemini said when wrong):
+  carapace_top     232/234  {'carapace_left': 2}
+  carapace_left    156/228  {'carapace_side': 65, 'carapace_right': 4, 'carapace_top': 3}
+  carapace_right   139/229  {'carapace_side': 83, 'carapace_left': 5, 'carapace_top': 2}
+  plastron          52/57   {'carapace_top': 4, 'carapace_left': 1}
+  front             27/56   {'carapace_top': 16, 'rear': 8, 'carapace_right': 4, 'carapace_left': 1}
+  rear              19/41   {'carapace_top': 20, 'carapace_right': 1, 'carapace_side': 1}
+  site_view         39/151  {'carapace_top': 56, 'carapace_right': 26, 'carapace_left': 20, 'carapace_side': 6}
+
+top/left/right only: 527/691
+left/right photos: 295 right, 148 'side', 9 swapped (of 457)
+  when Gemini says carapace_left: right 156/185
+  when Gemini says carapace_right: right 139/174
+  when Gemini says carapace_side: {'carapace_left': 65, 'carapace_right': 83, 'site_view': 6, 'rear': 1}
+
+box vs box-only prompt: median IoU 0.990, >=0.9 in 99%, <0.7 in 0 of 628
+shell found: 990 (box-only prompt: 629)

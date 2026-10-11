@@ -1,0 +1,38 @@
+reference photos by view: Counter({np.str_('carapace_right'): 183, np.str_('carapace_top'): 176, np.str_('carapace_left'): 167, np.str_('front'): 40, np.str_('back'): 26, np.str_('site_view'): 15, np.str_('rear'): 11, np.str_('plastron'): 10})
+right turtle, same view : median 7.6, >=2 in 86% (n=477)
+right turtle, other view: median 1.0, >=2 in 29% (n=530)
+best wrong turtle, same view : median 0.7, >=2 in 6% (n=534)
+best wrong turtle, other view: median 0.8, >=2 in 3% (n=534)
+SIFT top-1, compare with every view: 87.6%   same view only: 83.7%  (534 queries)
+which view the right turtle's best match came from (query -> ref):
+  carapace_right  -> carapace_right  147
+  carapace_top    -> carapace_top    130
+  carapace_left   -> carapace_left   129
+  front           -> front           20
+  carapace_left   -> carapace_top    9
+  carapace_top    -> carapace_right  8
+  carapace_top    -> carapace_left   8
+  back            -> back            7
+  carapace_right  -> carapace_top    7
+  back            -> carapace_top    7
+  front           -> carapace_top    6
+  site_view       -> carapace_right  6
+  plastron        -> plastron        6
+  rear            -> carapace_top    5
+  site_view       -> carapace_top    4
+  rear            -> back            4
+  front           -> carapace_right  4
+  front           -> carapace_left   4
+  back            -> carapace_left   4
+  back            -> carapace_right  3
+  back            -> rear            3
+  carapace_left   -> carapace_right  2
+  rear            -> carapace_right  2
+  site_view       -> front           2
+  carapace_top    -> site_view       1
+  site_view       -> site_view       1
+  site_view       -> carapace_left   1
+  carapace_left   -> back            1
+  plastron        -> carapace_top    1
+  carapace_right  -> site_view       1
+  front           -> site_view       1
